@@ -32,7 +32,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5.3.0
         with:
-          python-version: '3.12'  # Use a stable version
+          python-version: '3.13'  # Use a stable version
 
       - name: Install Python venv
         shell: bash
