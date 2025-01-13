@@ -28,7 +28,7 @@ setup(
     description="Wyoming Server for Whisper powered by TensorRT",
     url="https://github.com/JonahMMay/wyoming-whisper-trt",
     author="Jonah May",
-    author_email="mike@rhasspy.org",
+    author_email="jonah@mayfamily.me",
     license="MIT",
     packages=setuptools.find_packages(),
     package_data={module_name: [str(p.relative_to(module_dir)) for p in data_files]},
@@ -39,6 +39,7 @@ setup(
         "Topic :: Text Processing :: Linguistic",
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
     ],
     keywords="rhasspy wyoming whisper stt",
     entry_points={
