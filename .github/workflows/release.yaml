@@ -25,7 +25,7 @@ jobs:
         run: zip -x '*.git*' -r release.zip .
 
       - name: Extract owner and repo
-        uses: jungwinter/split@7f51d99e7cc1f147f6f99be75acf5e641930af88
+        uses: jungwinter/split@c9add84449df5452f56c8bc843653cec14eefbf4
         id: repo
         with:
           separator: '/'
