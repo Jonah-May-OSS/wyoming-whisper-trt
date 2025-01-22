@@ -33,7 +33,7 @@ jobs:
 
       # 4. Setup Python environment
       - name: Setup Python
-        uses: actions/setup-python@1928ae624dc06094d8c65f021a4700ea8fa56b9d
+        uses: actions/setup-python@b8cf3eb1ebc9c7f906e4ca96fcdf2e289e25d230
         with:
           python-version: '3.12'  # Use a stable version
 
