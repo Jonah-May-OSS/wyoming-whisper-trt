@@ -76,7 +76,7 @@ jobs:
           sudo systemctl restart docker
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@ba31df4664624f17e1b1ef1c9c85ed1ca9463a6d
+        uses: docker/setup-buildx-action@f7ce87c1d6bead3e36075b2ce75da1f6cc28aaca
 
       - name: Log in to Docker Hub
         uses: docker/login-action@327cd5a69de6c009b9ce71bce8395f28e651bf99
