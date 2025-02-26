@@ -161,7 +161,7 @@ jobs:
 
       - name: Build and Push AMD64 dGPU Image
         id: push-amd64
-        uses: docker/build-push-action@b16f42f92abaeb7610fd7fc99ab230d13e79e275
+        uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4
         with:
           context: .
           file: ./Dockerfile
@@ -172,7 +172,7 @@ jobs:
 
       - name: Build and Push ARM64 dGPU Image
         id: push-arm64
-        uses: docker/build-push-action@b16f42f92abaeb7610fd7fc99ab230d13e79e275
+        uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4
         with:
           context: .
           file: ./Dockerfile.arm64
@@ -183,7 +183,7 @@ jobs:
 
       - name: Build and Push ARM64 iGPU Image
         id: push-arm64-igpu
-        uses: docker/build-push-action@b16f42f92abaeb7610fd7fc99ab230d13e79e275
+        uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4
         with:
           context: .
           file: ./Dockerfile.igpu
