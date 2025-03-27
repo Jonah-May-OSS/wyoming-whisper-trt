@@ -6,5 +6,5 @@ tensorrt_cu12_libs~=10.9.0
 tensorrt_cu12_bindings~=10.9.0 
 tensorrt~=10.9.0
 packaging~=24.2
-onnx-graphsurgeon==0.5.6
+onnx-graphsurgeon==0.5.7
 torch~=2.6.0
