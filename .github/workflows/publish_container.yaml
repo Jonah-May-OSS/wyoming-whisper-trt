@@ -38,7 +38,7 @@ jobs:
           sudo apt-get install -y nvidia-open
       
       - name: Install CUDA Toolkit
-        uses: Jimver/cuda-toolkit@95b5a29a2823ef87666dcd45ec236fc4f82498d0
+        uses: Jimver/cuda-toolkit@9b993a72d35b5634a69ca7e34b39a002a87c367c
 
       - name: Install Docker and Buildx
         shell: bash
