@@ -7,4 +7,4 @@ tensorrt_cu12_bindings~=10.9.0
 tensorrt~=10.9.0
 packaging~=24.2
 onnx-graphsurgeon==0.5.8
-torch~=2.6.0
+torch~=2.7.0
