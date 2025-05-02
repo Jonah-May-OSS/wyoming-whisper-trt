@@ -4,7 +4,7 @@ openai-whisper==20240927
 psutil~=7.0.0
 tensorrt_cu12_libs~=10.9.0
 tensorrt_cu12_bindings~=10.9.0 
-tensorrt~=10.9.0
+tensorrt~=10.10.0
 packaging~=25.0
 onnx-graphsurgeon==0.5.8
 torch~=2.7.0
