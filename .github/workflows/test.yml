@@ -136,7 +136,7 @@ jobs:
 
       # 8. Upload server logs (always upload logs regardless of success or failure)
       - name: Upload server logs
-        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
+        uses: actions/upload-artifact@de65e23aa2b7e23d713bb51fbfcb6d502f8667d8
         with:
           name: server-logs
           path: server.log
