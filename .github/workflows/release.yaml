@@ -28,21 +28,21 @@ jobs:
           msg: ${{ github.repository }}
 
       - name: Install GitVersion
-        uses: gittools/actions/gitversion/setup@e1de650a45b3b0d473129facf7af129caf0a5ee7
+        uses: gittools/actions/gitversion/setup@2169f9f60f09b337bd709fa944dd054a60dc6759
         with:
           versionSpec: '5.x'
 
       - name: Use GitVersion
-        uses: gittools/actions/gitversion/execute@e1de650a45b3b0d473129facf7af129caf0a5ee7
+        uses: gittools/actions/gitversion/execute@2169f9f60f09b337bd709fa944dd054a60dc6759
         id: gitversion
 
       - name: Install GitReleaseManager
-        uses: gittools/actions/gitreleasemanager/setup@e1de650a45b3b0d473129facf7af129caf0a5ee7
+        uses: gittools/actions/gitreleasemanager/setup@2169f9f60f09b337bd709fa944dd054a60dc6759
         with:
           versionSpec: '0.20.x'
 
       - name: Create release with GitReleaseManager
-        uses: gittools/actions/gitreleasemanager/create@e1de650a45b3b0d473129facf7af129caf0a5ee7
+        uses: gittools/actions/gitreleasemanager/create@2169f9f60f09b337bd709fa944dd054a60dc6759
         with:
           token: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
           owner: ${{ steps.repo.outputs._0 }}
@@ -53,7 +53,7 @@ jobs:
             release.zip
 
       - name: Publish release with GitReleaseManager
-        uses: gittools/actions/gitreleasemanager/publish@e1de650a45b3b0d473129facf7af129caf0a5ee7
+        uses: gittools/actions/gitreleasemanager/publish@2169f9f60f09b337bd709fa944dd054a60dc6759
         with:
           token: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
           owner: ${{ steps.repo.outputs._0 }}
@@ -61,7 +61,7 @@ jobs:
           milestone: ${{ steps.gitversion.outputs.MajorMinorPatch }}
 
       - name: Close release with GitReleaseManager
-        uses: gittools/actions/gitreleasemanager/close@e1de650a45b3b0d473129facf7af129caf0a5ee7
+        uses: gittools/actions/gitreleasemanager/close@2169f9f60f09b337bd709fa944dd054a60dc6759
         with:
           token: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
           owner: ${{ steps.repo.outputs._0 }}
