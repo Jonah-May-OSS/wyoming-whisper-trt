@@ -1,20 +1,8 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # Navigate to the application directory
 cd /usr/src/wyoming-whisper-trt
-
-# Determine which model to use:
-# 1) If a CLI arg was given, use that
-# 2) Else if $MODEL is set, use that
-# 3) Otherwise default to "base"
-if [ $# -ge 1 ]; then
-  MODEL="$1"
-elif [ -n "${MODEL:-}" ]; then
-  MODEL="$MODEL"
-else
-  MODEL="base"
-fi
 
 echo "▶️  Using Whisper model: $MODEL"
 
@@ -40,7 +28,7 @@ fi
 
 # Launch the main application
 exec python3 -m wyoming_whisper_trt.__main__ \
-    --model "$MODEL" \
+    --model "${MODEL:-base}" \
     --language "${LANGUAGE:-auto}" \
     --uri "${URI:-tcp://0.0.0.0:10300}" \
     --data-dir "${DATA_DIR:-/data}" \
