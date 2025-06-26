@@ -10,6 +10,7 @@ services:
       - DEVICE=cuda
       - DATA_DIR=/data
       - DOWNLOAD_DIR=/data/models
+      - COMPUTE_TYPE=int8
     volumes:
       - wyoming-data:/data
     restart: unless-stopped
