@@ -1,14 +1,10 @@
-mode: ContinuousDelivery
-
 branches:
   release:
-    # on release/* branches, don’t bump Minor — only bump Patch
-    regex: (release(\/|\\))(?<BranchName>.+)
+    regex: "(release\\/|\\\\)(?<BranchName>.+)"
     tag: ''
     increment: Patch
     prevent-increment-of-merged-branch-version: true
     track-merge-target: false
 
   develop:
-    # when merging a release back into develop, don’t auto-increment
     prevent-increment-of-merged-branch-version: true
