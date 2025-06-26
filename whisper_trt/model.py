@@ -526,69 +526,6 @@ class WhisperTRTBuilder:
         whisper_trt = whisper_trt.cuda().eval()
         return whisper_trt
 
-    @classmethod
-    @torch.no_grad()
-    def load_from_trt(
-        cls,
-        encoder_engine_path: str,
-        decoder_engine_path: str,
-        name: str,
-        verbose: bool = False,
-    ) -> WhisperTRT:
-        # 1) Load encoder engine
-        enc_mod = torch2trt.TRTModule().cuda()
-        with open(encoder_engine_path, "rb") as f:
-            enc_mod.load_engine(f.read())
-
-        # 2) Load decoder engine
-        dec_mod = torch2trt.TRTModule().cuda()
-        with open(decoder_engine_path, "rb") as f:
-            dec_mod.load_engine(f.read())
-
-        # 3) Reconstruct dims and tokenizer
-        model_inst = load_model(name).cuda().eval()
-        dims = model_inst.dims
-        tokenizer = cls.get_tokenizer()
-
-        # 4) Wrap encoder
-        encoder = AudioEncoderTRT(
-            enc_mod,
-            model_inst.encoder.positional_embedding,  # already a Tensor
-        )
-
-        # 5) Prepare decoder’s extra state
-        #   - token embedding
-        text_emb = nn.Embedding(dims.n_vocab, dims.n_text_state).cuda()
-        text_emb.load_state_dict(model_inst.decoder.token_embedding.state_dict())
-
-        #   - positional embedding (Parameter)
-        text_pos = nn.Parameter(model_inst.decoder.positional_embedding).cuda()
-
-        #   - LayerNorm, with its learned weights
-        from whisper.model import LayerNorm
-
-        text_ln = LayerNorm(dims.n_text_state).cuda()
-        text_ln.load_state_dict(model_inst.decoder.ln.state_dict())
-
-        #   - attention mask (Tensor)
-        mask = model_inst.decoder.mask
-        if not mask.is_cuda:
-            mask = mask.cuda()
-
-        # 6) Wrap decoder
-        decoder = TextDecoderTRT(
-            dec_mod,
-            text_emb,
-            text_pos,
-            text_ln,
-            mask,
-        )
-
-        # 7) Return the fused WhisperTRT
-        return (
-            WhisperTRT(dims, encoder, decoder, tokenizer, verbose=verbose).cuda().eval()
-        )
-
 
 # -----------------------------------------------------------------------------
 # ENGLISH-ONLY MODEL BUILDERS
@@ -728,65 +665,39 @@ def onnx_to_trt_engine(
 def load_trt_model(
     name: str,
     path: Optional[str] = None,
-    encoder_onnx: Optional[str] = None,
-    decoder_onnx: Optional[str] = None,
     build: bool = True,
     verbose: bool = False,
 ) -> WhisperTRT:
     """
-    Load or build a TensorRT‐optimized Whisper model.
-
-    Supports:
-     - Built-in variants via MODEL_BUILDERS (producing .pth via Torch2TRT).
-     - Arbitrary ONNX files (converting ONNX→.trt engines once).
-     - Generic HF fallback via WhisperTRTBuilder if you like.
+    Load or build a TensorRT‐optimized Whisper model via Torch2TRT .pth files only.
     """
     cache_dir = get_cache_dir()
     make_cache_dir()
 
+    # default to built-in .pth filename
     safe_name = name.replace("/", "_")
-
-    # default to built-in .pth
     if path is None:
         path = os.path.join(cache_dir, MODEL_FILENAMES.get(name, f"{safe_name}.pth"))
 
-    # 1) If the user passed separate ONNX paths — convert each to TRT
-    if encoder_onnx:
-        # build engine paths in cache
-        enc_trt = os.path.join(cache_dir, f"{safe_name}_encoder.trt")
-        dec_trt = None
-        if decoder_onnx:
-            dec_trt = os.path.join(cache_dir, f"{safe_name}_decoder.trt")
-
-        if not os.path.exists(enc_trt):
-            print(f"⤵ Converting encoder ONNX → TRT for '{name}'")
-            onnx_to_trt_engine(encoder_onnx, enc_trt)
-
-        if decoder_onnx and not os.path.exists(dec_trt):
-            print(f"⤵ Converting decoder ONNX → TRT for '{name}'")
-            onnx_to_trt_engine(decoder_onnx, dec_trt)
-
-        # now wrap one or two engines into your WhisperTRT class
-        return WhisperTRTBuilder.load_from_trt(
-            encoder_path=enc_trt,
-            decoder_path=dec_trt,
-            name=name,
-            verbose=verbose,
-        )
-
-    # 2) Torch2TRT .pth path → use existing builder
+    # Figure out which builder class to use
     if name in MODEL_BUILDERS:
         builder_cls = MODEL_BUILDERS[name]
     else:
         builder_cls = WhisperTRTBuilder
         builder_cls.model = name
 
-    # 3) Build .pth if missing
+    # Build the .pth if missing
     if not os.path.exists(path):
         if not build:
             raise RuntimeError(f"No model found at {path}. Call with build=True.")
         print(f"⚙️  Building TRT-optimized .pth for '{name}' → {path}")
         builder_cls.build(path, verbose=verbose)
 
-    # 4) Otherwise load the Torch2TRT .pth or fallback to building it
+    # Finally load the built Torch2TRT .pth
+    logger.debug(
+        "Loading TensorRT model via Torch2TRT: name=%s, path=%s, quant_mode=%s",
+        name,
+        path,
+        WhisperTRTBuilder.quant_mode,
+    )
     return builder_cls.load(path)
