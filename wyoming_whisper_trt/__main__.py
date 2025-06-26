@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+
 """
 Main entry point for the Whisper TRT server.
 
@@ -23,10 +24,8 @@ from wyoming.server import AsyncServer
 
 from . import __version__
 from .handler import WhisperTrtEventHandler
-from whisper_trt.cache import get_cache_dir, make_cache_dir
-from whisper_trt.utils import check_file_md5, download_file
 
-from whisper_trt import load_trt_model, WhisperTRT
+from whisper_trt import load_trt_model, WhisperTRT, WhisperTRTBuilder, MODEL_FILENAMES
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -106,6 +105,7 @@ def extract_languages(model: WhisperTRT, model_name: str) -> List[str]:
     """
     if is_language_specific(model_name):
         # For example, "small.en" -> "en"
+
         language_code = model_name.split(".")[-1]
         languages = [language_code]
         logger.debug(
@@ -115,6 +115,7 @@ def extract_languages(model: WhisperTRT, model_name: str) -> List[str]:
         try:
             # If your WhisperTRT class has a get_supported_languages() method,
             # it would return a list of all valid language codes. If not, fallback to ["en"].
+
             languages = model.get_supported_languages()
             logger.debug(
                 f"Supported languages retrieved for model '{model_name}': {languages}"
@@ -198,17 +199,26 @@ async def run_server(uri: str, handler_factory_func, *args, **kwargs) -> None:
         logger.error(f"Server encountered an error: {e}")
         raise
     finally:
-        await server.close()
+        logger.info("Shutting down server...")
+        # Attempt to gracefully shut down the server
+        try:
+            await server.shutdown()
+        except AttributeError:
+            # Fallback to stop() if available, or just log
+            if hasattr(server, "stop"):
+                await server.stop()
         logger.info("Server has been shut down.")
 
 
 async def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Whisper TRT ASR Server")
+    valid_models = list(MODEL_FILENAMES.keys())
     parser.add_argument(
         "--model",
         required=True,
-        help="Name of Whisper model to use (e.g., 'tiny', 'small', 'small.en')",
+        choices=valid_models,
+        help=("Name of Whisper model to use " f"(one of {', '.join(valid_models)})"),
     )
     parser.add_argument(
         "--uri",
@@ -263,8 +273,6 @@ async def main() -> None:
         version=f"%(prog)s {__version__}",
         help="Print version and exit",
     )
-
-    # Restored/added argument for default language selection
     parser.add_argument(
         "--language",
         type=str,
@@ -290,7 +298,6 @@ async def main() -> None:
         logger.debug(
             f"No download directory specified. Using first data directory: {args.download_dir}"
         )
-
     download_path = Path(args.download_dir)
     try:
         download_path.mkdir(parents=True, exist_ok=True)
@@ -301,11 +308,20 @@ async def main() -> None:
 
     # Load Whisper TRT model
     try:
-        logger.info(f"Loading Whisper TRT model '{model_name}'...")
-        trt_model = load_trt_model(
-            model_name, path=str(download_path / f"{model_name}.pth"), build=True
-        )
-        logger.info(f"Whisper TRT model '{model_name}' loaded successfully.")
+        # Set TensorRT precision mode
+        if args.compute_type == "int8":
+            WhisperTRTBuilder.quant_mode = "int8"
+            WhisperTRTBuilder.fp16_mode = False
+        elif args.compute_type == "float16":
+            WhisperTRTBuilder.quant_mode = "fp16"
+            WhisperTRTBuilder.fp16_mode = True
+        else:  # "default" → full precision (FP32)
+            WhisperTRTBuilder.quant_mode = "fp32"
+            WhisperTRTBuilder.fp16_mode = False
+
+        logger.info(f"Loading Whisper TRT model '{model_name}' via .pth → TRT")
+        trt_model = load_trt_model(model_name, verbose=args.debug)
+        logger.info("Whisper TRT model loaded successfully.")
     except Exception as e:
         logger.error(f"Failed to load Whisper TRT model '{model_name}': {e}")
         sys.exit(1)

@@ -13,6 +13,8 @@ on:
       - 'examples/**'
       - 'tests/**'
       - '**/*.md'
+      - 'renovate.json'
+      - 'GitReleaseManager.yaml'
 
 jobs:
   test_linux:
@@ -65,8 +67,8 @@ jobs:
 
       - name: Set CUDA 12.9 env vars
         run: |
-          echo 'export PATH=/usr/local/cuda-12.9/bin${PATH:+:${PATH}}' >> $GITHUB_ENV
-          echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.9/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}' >> $GITHUB_ENV
+          echo "PATH=/usr/local/cuda-12.9/bin${PATH:+:${PATH}}"              >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=/usr/local/cuda-12.9/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" >> "$GITHUB_ENV"
 
       # 6. Create and activate virtual environment
       - name: Setup Virtual Environment

@@ -4,6 +4,15 @@ services:
     container_name: wyoming-whisper-trt
     ports:
       - 10300:10300
+    environment:
+      - MODEL=base
+      - LANGUAGE=auto
+      - DEVICE=cuda
+      - DATA_DIR=/data
+      - DOWNLOAD_DIR=/data/models
+      - COMPUTE_TYPE=int8
+    volumes:
+      - wyoming-data:/data
     restart: unless-stopped
     deploy:
       resources:

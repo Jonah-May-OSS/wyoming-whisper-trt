@@ -46,6 +46,25 @@ NOTE: ARM64 dGPU and iGPU containers may take a while to start on first launch a
 1. Install and configure Docker
 2. Install and configure the [Nvidia Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
 
+### Model options
+The following models are officially supported. However, in theory, any STT ONNX Whisper model on HuggingFace should work. For example, `RedHatAI/whisper-large-v3-FP8-Dynamic`.
+#### English-only models
+- tiny.en
+- base.en
+- small.en
+
+#### Multilingual models
+- tiny
+- base
+- small
+- medium
+- large
+- large-v2
+- large-v3
+- large-v3-turbo
+
+To change the model and/or language used, modify the below docker compose files or docker run commands accordingly with the MODEL environment variable.
+
 ### Docker Compose (recommended)
 For AMD64 with discrete GPUs:
 ```
@@ -55,6 +74,15 @@ services:
     container_name: wyoming-whisper-trt
     ports:
       - 10300:10300
+    environment:
+      - MODEL=base
+      - LANGUAGE=auto
+      - DEVICE=cuda
+      - DATA_DIR=/data
+      - DOWNLOAD_DIR=/data/models
+      - COMPUTE_TYPE=int8
+    volumes:
+      - wyoming-data:/data
     restart: unless-stopped
     deploy:
       resources:
@@ -73,6 +101,15 @@ services:
     container_name: wyoming-whisper-trt
     ports:
       - 10300:10300
+    environment:
+      - MODEL=base
+      - LANGUAGE=auto
+      - DEVICE=cuda
+      - DATA_DIR=/data
+      - DOWNLOAD_DIR=/data/models
+      - COMPUTE_TYPE=int8
+    volumes:
+      - wyoming-data:/data
     restart: unless-stopped
     deploy:
       resources:
@@ -89,6 +126,15 @@ services:
   wyoming-whisper-trt:
     image: captnspdr/wyoming-whisper-trt:latest-igpu
     container_name: wyoming-whisper-trt
+    environment:
+      - MODEL=base
+      - LANGUAGE=auto
+      - DEVICE=cuda
+      - DATA_DIR=/data
+      - DOWNLOAD_DIR=/data/models
+      - COMPUTE_TYPE=int8
+    volumes:
+      - wyoming-data:/data
     restart: unless-stopped
     network_mode: host
     runtime: nvidia
@@ -105,15 +151,51 @@ services:
    
 For AMD64 with dGPU:
 
-`docker run --gpus all --name wyoming-whisper-trt -d -p 10300:10300 captnspdr/wyoming-whisper-trt:latest-amd64`
+```bash
+docker run --gpus all \
+  --name wyoming-whisper-trt \
+  --restart unless-stopped \
+  -d \
+  -p 10300:10300 \
+  -e MODEL=base \
+  -e LANGUAGE=auto \
+  -e DEVICE=cuda \
+  -e COMPUTE_TYPE=int8 \
+  -v /srv/wyoming-data:/data \
+  captnspdr/wyoming-whisper-trt:latest-amd64
+```
 
 For ARM64 with dGPU:
 
-`docker run --gpus all --name wyoming-whisper-trt -d -p 10300:10300 captnspdr/wyoming-whisper-trt:latest-arm64`
+```bash
+docker run --gpus all \
+  --name wyoming-whisper-trt \
+  --restart unless-stopped \
+  -d \
+  -p 10300:10300 \
+  -e MODEL=base \
+  -e LANGUAGE=auto \
+  -e DEVICE=cuda \
+  -e COMPUTE_TYPE=int8 \
+  -v /srv/wyoming-data:/data \
+  captnspdr/wyoming-whisper-trt:latest-arm64
+```
 
 For ARM64 with iGPU:
 
-`docker run --gpus all --name wyoming-whisper-trt -d -p 10300:10300 captnspdr/wyoming-whisper-trt:latest-igpu`
+```bash
+docker run --gpus all \
+  --name wyoming-whisper-trt \
+  --restart unless-stopped \
+  -d \
+  -p 10300:10300 \
+  -e MODEL=base \
+  -e LANGUAGE=auto \
+  -e DEVICE=cuda \
+  -e COMPUTE_TYPE=int8 \
+  -v /srv/wyoming-data:/data \
+  captnspdr/wyoming-whisper-trt:latest-igpu
+```
 
 
 

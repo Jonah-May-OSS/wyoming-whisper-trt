@@ -32,7 +32,9 @@ import torch.nn.functional as F
 import numpy as np
 import torch.nn as nn
 import torch2trt
-import tensorrt
+import tensorrt as trt
+
+TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
 
 from whisper import load_model
 from whisper.model import LayerNorm, Linear, Tensor, ModelDimensions, sinusoids, Whisper
@@ -399,7 +401,7 @@ class WhisperTRTBuilder:
             output_names=["output"],
             max_workspace_size=cls.max_workspace_size,
             fp16_mode=cls.fp16_mode if not int8_mode else False,
-            log_level=tensorrt.Logger.VERBOSE if cls.verbose else tensorrt.Logger.ERROR,
+            log_level=trt.Logger.VERBOSE if cls.verbose else trt.Logger.ERROR,
         )
         return engine
 
@@ -436,7 +438,7 @@ class WhisperTRTBuilder:
             output_names=["output"],
             max_workspace_size=cls.max_workspace_size,
             fp16_mode=cls.fp16_mode if not int8_mode else False,
-            log_level=tensorrt.Logger.VERBOSE if cls.verbose else tensorrt.Logger.ERROR,
+            log_level=trt.Logger.VERBOSE if cls.verbose else trt.Logger.ERROR,
         )
         return engine
 
@@ -627,19 +629,41 @@ MODEL_BUILDERS = {
 
 
 def load_trt_model(
-    name: str, path: Optional[str] = None, build: bool = True, verbose: bool = False
+    name: str,
+    path: Optional[str] = None,
+    build: bool = True,
+    verbose: bool = False,
 ) -> WhisperTRT:
-    if name not in MODEL_BUILDERS:
-        raise RuntimeError(f"Model '{name}' is not supported by WhisperTRT.")
+    """
+    Load or build a TensorRT‐optimized Whisper model via Torch2TRT .pth files only.
+    """
+    cache_dir = get_cache_dir()
+    make_cache_dir()
+
+    # default to built-in .pth filename
+    safe_name = name.replace("/", "_")
     if path is None:
-        path = os.path.join(get_cache_dir(), MODEL_FILENAMES[name])
-        make_cache_dir()
-    builder = MODEL_BUILDERS[name]
+        path = os.path.join(cache_dir, MODEL_FILENAMES.get(name, f"{safe_name}.pth"))
+
+    # Figure out which builder class to use
+    if name in MODEL_BUILDERS:
+        builder_cls = MODEL_BUILDERS[name]
+    else:
+        builder_cls = WhisperTRTBuilder
+        builder_cls.model = name
+
+    # Build the .pth if missing
     if not os.path.exists(path):
         if not build:
-            raise RuntimeError(
-                f"No model found at {path}. Please call load_trt_model with build=True."
-            )
-        else:
-            builder.build(path, verbose=verbose)
-    return builder.load(path)
+            raise RuntimeError(f"No model found at {path}. Call with build=True.")
+        print(f"⚙️  Building TRT-optimized .pth for '{name}' → {path}")
+        builder_cls.build(path, verbose=verbose)
+
+    # Finally load the built Torch2TRT .pth
+    logger.debug(
+        "Loading TensorRT model via Torch2TRT: name=%s, path=%s, quant_mode=%s",
+        name,
+        path,
+        WhisperTRTBuilder.quant_mode,
+    )
+    return builder_cls.load(path)
