@@ -22,6 +22,8 @@ from . import __version__
 from .handler import WhisperTrtEventHandler
 from whisper_trt.cache import get_cache_dir, make_cache_dir
 from whisper_trt.utils import check_file_md5, download_file
+from whisper_trt import MODEL_FILENAMES
+from huggingface_hub import hf_hub_download
 
 from whisper_trt import load_trt_model, WhisperTRT
 
@@ -197,7 +199,26 @@ async def run_server(uri: str, handler_factory_func, *args, **kwargs) -> None:
     finally:
         await server.close()
         logger.info("Server has been shut down.")
+        
 
+def fetch_model_source(model_name: str, download_dir: Path) -> Path:
+    download_dir.mkdir(exist_ok=True, parents=True)
+    # 1) If it’s one of the built-ins, keep your existing PTH filename:
+    if model_name in MODEL_FILENAMES:
+        return download_dir / MODEL_FILENAMES[model_name]
+    # 2) Otherwise treat it as a HF repo ID → download ONNX
+    onnx_name = f"{model_name.replace('/', '_')}.onnx"
+    local_onnx = download_dir / onnx_name
+    if not local_onnx.exists():
+        print(f"⤵  Downloading ONNX model for '{model_name}'")
+        hf_hub_download(
+          repo_id=model_name,
+          filename="model.onnx",
+          local_dir=str(download_dir),
+          local_dir_use_symlinks=False,
+        )
+    return local_onnx
+    
 
 async def main() -> None:
     """Main entry point."""
@@ -298,9 +319,13 @@ async def main() -> None:
 
     # Load Whisper TRT model
     try:
+        source_path = fetch_model_source(model_name, download_path)
+        # if it’s an ONNX file, pass build=True so load_trt_model will convert it:
         logger.info(f"Loading Whisper TRT model '{model_name}'...")
         trt_model = load_trt_model(
-            model_name, path=str(download_path / f"{model_name}.pth"), build=True
+            model_name,
+            path=str(source_path),
+            build=True
         )
         logger.info(f"Whisper TRT model '{model_name}' loaded successfully.")
     except Exception as e:
