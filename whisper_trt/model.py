@@ -763,5 +763,12 @@ def load_trt_model(
         print(f"⚙️  Building TRT-optimized .pth for '{name}' → {path}")
         builder_cls.build(path, verbose=verbose)
 
+    # Log the current quantization / precision mode
+    logger.debug(
+        "WhisperTRTBuilder settings before loading model: quant_mode=%s, fp16_mode=%s",
+        WhisperTRTBuilder.quant_mode,
+        WhisperTRTBuilder.fp16_mode,
+    )
+
     # 4) Load from the .pth (this will construct separate encoder/decoder engines under the hood)
     return builder_cls.load(path)
