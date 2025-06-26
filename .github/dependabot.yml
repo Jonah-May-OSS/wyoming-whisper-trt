@@ -1,11 +1,22 @@
-# To get started with Dependabot version updates, you'll need to specify which
-# package ecosystems to update and where the package manifests are located.
-# Please see the documentation for all configuration options:
-# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
-
 version: 2
 updates:
-  - package-ecosystem: "pip" # See documentation for possible values
-    directory: "/" # Location of package manifests
+  - package-ecosystem: "pip"
+    directory: "/"               # location of your requirements.txt
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 5
+    # only bump direct dependencies:
+    allow:
+      - dependency-type: "direct"
+    # auto-merge minor & patch
+    automerge: true
+    automerge-type: "pr"
+    # group TensorRT and its libs/bindings
+    groups:
+      tensorrt:
+        patterns:
+          - "^tensorrt$"
+          - "^tensorrt\\-cu12\\-libs$"
+          - "^tensorrt\\-cu12\\-bindings$"
+        # optional human-friendly title
+        group-name: "TensorRT & related packages"
