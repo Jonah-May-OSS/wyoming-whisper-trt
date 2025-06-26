@@ -207,33 +207,32 @@ async def run_server(uri: str, handler_factory_func, *args, **kwargs) -> None:
         logger.info("Server has been shut down.")
 
 
-def fetch_model_source(model_name: str, download_dir: Path) -> Path:
+def fetch_model_source(model_name: str, download_dir: Path) -> Optional[Path]:
     download_dir.mkdir(exist_ok=True, parents=True)
-    # 1) If it’s one of the built-ins, keep your existing PTH filename:
 
+    # 1) If it’s one of our built-ins, return the .pth filename
     if model_name in MODEL_FILENAMES:
         return download_dir / MODEL_FILENAMES[model_name]
-    # 2) Otherwise treat it as a HF repo ID → download ONNX
 
-    onnx_name = f"{model_name.replace('/', '_')}.onnx"
-    local_onnx = download_dir / onnx_name
-    if not local_onnx.exists():
-        print(f"⤵  Downloading ONNX model for '{model_name}'")
+    # 2) Otherwise, try to download ONNX variants…
+    possible = [
+        "model.onnx",
+        f"{model_name.split('/')[-1]}.onnx",
+        "onnx/model.onnx",
+    ]
+    for fname in possible:
         try:
-            # Note: This assumes the ONNX file is named "model.onnx" in the HF repo
-            downloaded_path = hf_hub_download(
+            path = hf_hub_download(
                 repo_id=model_name,
-                filename="model.onnx",
+                filename=fname,
                 local_dir=str(download_dir),
-                local_dir_use_symlinks=False,
             )
-            # Rename to expected filename if needed
-            if Path(downloaded_path).name != onnx_name:
-                Path(downloaded_path).rename(local_onnx)
-        except Exception as e:
-            logger.error(f"Failed to download ONNX model from '{model_name}': {e}")
-            raise RuntimeError(f"Could not fetch model '{model_name}': {e}") from e
-    return local_onnx
+            return Path(path)
+        except Exception:
+            continue
+
+    # 3) No ONNX found → return None so the caller can fall back
+    return None
 
 
 async def main() -> None:
@@ -267,9 +266,9 @@ async def main() -> None:
     )
     parser.add_argument(
         "--compute-type",
-        default="int8",
-        choices=["float16", "int8"],
-        help="Compute type (float16, int8)",
+        default="default",
+        choices=["default", "float16", "int8"],
+        help="Compute type (float16, int8, etc.)",
     )
     parser.add_argument(
         "--beam-size",
@@ -341,10 +340,18 @@ async def main() -> None:
         elif args.compute_type == "float16":
             WhisperTRTBuilder.quant_mode = "fp16"
             WhisperTRTBuilder.fp16_mode = True
+        else:  # "default" → full precision (FP32)
+            WhisperTRTBuilder.quant_mode = "fp32"
+            WhisperTRTBuilder.fp16_mode = False
 
         # if it’s an ONNX file, pass build=True so load_trt_model will convert it:
         logger.info(f"Loading Whisper TRT model '{model_name}'...")
-        trt_model = load_trt_model(model_name, path=str(source_path), build=True)
+        if source_path is None:
+            # No ONNX on HF: let load_trt_model build from the PyTorch checkpoint
+            trt_model = load_trt_model(model_name, path=None, build=True)
+        else:
+            # We got an ONNX file; let load_trt_model convert it
+            trt_model = load_trt_model(model_name, path=str(source_path), build=True)
         logger.info(f"Whisper TRT model '{model_name}' loaded successfully.")
     except Exception as e:
         logger.error(f"Failed to load Whisper TRT model '{model_name}': {e}")
