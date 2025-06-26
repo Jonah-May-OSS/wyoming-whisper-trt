@@ -570,6 +570,7 @@ class WhisperTRTBuilder:
             WhisperTRT(dims, encoder, decoder, tokenizer, verbose=verbose).cuda().eval()
         )
 
+
 # -----------------------------------------------------------------------------
 # ENGLISH-ONLY MODEL BUILDERS
 # -----------------------------------------------------------------------------
