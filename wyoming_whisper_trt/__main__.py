@@ -267,9 +267,9 @@ async def main() -> None:
     )
     parser.add_argument(
         "--compute-type",
-        default="default",
-        choices=["default", "float16", "int8"],
-        help="Compute type (float16, int8, etc.)",
+        default="int8",
+        choices=["float16", "int8"],
+        help="Compute type (float16, int8)",
     )
     parser.add_argument(
         "--beam-size",
@@ -341,9 +341,6 @@ async def main() -> None:
         elif args.compute_type == "float16":
             WhisperTRTBuilder.quant_mode = "fp16"
             WhisperTRTBuilder.fp16_mode = True
-        else:  # "default" → full precision (FP32)
-            WhisperTRTBuilder.quant_mode = "fp32"
-            WhisperTRTBuilder.fp16_mode = False
 
         # if it’s an ONNX file, pass build=True so load_trt_model will convert it:
         logger.info(f"Loading Whisper TRT model '{model_name}'...")
