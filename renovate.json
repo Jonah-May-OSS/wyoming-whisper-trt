@@ -14,7 +14,8 @@
       ],
       "groupName": "TensorRT packages",
       "groupSlug": "tensorrt",
-      "rangeStrategy": "bump"
+      "rangeStrategy": "bump",
+      "description": "Keep all TensorRT wheels on the same version; upgrading one without the others breaks runtime."
     },
     {
       "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
