@@ -17,7 +17,7 @@ import sys
 import time
 from functools import partial
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
 from wyoming.info import AsrModel, AsrProgram, Attribution, Info
 from wyoming.server import AsyncServer
