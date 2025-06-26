@@ -2,6 +2,8 @@ services:
   wyoming-whisper-trt:
     image: captnspdr/wyoming-whisper-trt:latest-igpu
     container_name: wyoming-whisper-trt
+    environment:
+      MODEL: "base"
     restart: unless-stopped
     network_mode: host
     runtime: nvidia
