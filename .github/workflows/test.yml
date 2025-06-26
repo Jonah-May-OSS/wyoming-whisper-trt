@@ -146,6 +146,7 @@ jobs:
             sudo reboot
           else
             echo "✅ Error 803 not found — skipping repair."
+          fi
 
       # 9. Upload server logs (always upload logs regardless of success or failure)
       - name: Upload server logs
