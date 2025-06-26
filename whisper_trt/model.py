@@ -730,8 +730,9 @@ def load_trt_model(
 
         encoder_onnx = f"{safe_name}_encoder.onnx"
         decoder_onnx = f"{safe_name}_decoder.onnx"
-        # (You will need to export those subgraphs to ONNX yourself,
-        # e.g. via torch.onnx.export on encoder and decoder modules.)
+        # Note: You must export encoder and decoder subgraphs to ONNX separately.
+        # See documentation or export scripts for guidance on creating these files
+        # using torch.onnx.export on the respective model components.
 
         enc_trt = os.path.join(cache_dir, f"{safe_name}_encoder.trt")
         dec_trt = os.path.join(cache_dir, f"{safe_name}_decoder.trt")
