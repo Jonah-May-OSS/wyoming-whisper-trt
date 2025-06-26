@@ -550,19 +550,41 @@ class WhisperTRTBuilder:
         dims = model_inst.dims
         tokenizer = cls.get_tokenizer()
 
-        # 4) Build wrappers
-        encoder = AudioEncoderTRT(enc_mod, model_inst.encoder.positional_embedding)
-        text_emb = nn.Embedding(dims.n_vocab, dims.n_text_state)
+        # 4) Wrap encoder
+        encoder = AudioEncoderTRT(
+            enc_mod,
+            model_inst.encoder.positional_embedding,  # already a Tensor
+        )
+
+        # 5) Prepare decoder’s extra state
+        #   - token embedding
+        text_emb = nn.Embedding(dims.n_vocab, dims.n_text_state).cuda()
         text_emb.load_state_dict(model_inst.decoder.token_embedding.state_dict())
+
+        #   - positional embedding (Parameter)
+        text_pos = nn.Parameter(model_inst.decoder.positional_embedding).cuda()
+
+        #   - LayerNorm, with its learned weights
+        from whisper.model import LayerNorm
+
+        text_ln = LayerNorm(dims.n_text_state).cuda()
+        text_ln.load_state_dict(model_inst.decoder.ln.state_dict())
+
+        #   - attention mask (Tensor)
+        mask = model_inst.decoder.mask
+        if not mask.is_cuda:
+            mask = mask.cuda()
+
+        # 6) Wrap decoder
         decoder = TextDecoderTRT(
             dec_mod,
             text_emb,
-            model_inst.decoder.positional_embedding,
-            model_inst.decoder.ln,
-            model_inst.decoder.mask,
+            text_pos,
+            text_ln,
+            mask,
         )
 
-        # 5) Wrap into WhisperTRT
+        # 7) Return the fused WhisperTRT
         return (
             WhisperTRT(dims, encoder, decoder, tokenizer, verbose=verbose).cuda().eval()
         )
@@ -704,7 +726,12 @@ def onnx_to_trt_engine(
 
 
 def load_trt_model(
-    name: str, path: Optional[str] = None, build: bool = True, verbose: bool = False
+    name: str,
+    path: Optional[str] = None,
+    encoder_onnx: Optional[str] = None,
+    decoder_onnx: Optional[str] = None,
+    build: bool = True,
+    verbose: bool = False,
 ) -> WhisperTRT:
     """
     Load or build a TensorRT‐optimized Whisper model.
@@ -723,30 +750,28 @@ def load_trt_model(
     if path is None:
         path = os.path.join(cache_dir, MODEL_FILENAMES.get(name, f"{safe_name}.pth"))
 
-    # 1) ONNX path → convert into *two* TRT engines
-    if path.endswith(".onnx"):
-        if not build:
-            raise RuntimeError("ONNX conversion skipped (build=False)")
-
-        encoder_onnx = f"{safe_name}_encoder.onnx"
-        decoder_onnx = f"{safe_name}_decoder.onnx"
-        # Note: You must export encoder and decoder subgraphs to ONNX separately.
-        # See documentation or export scripts for guidance on creating these files
-        # using torch.onnx.export on the respective model components.
-
+    # 1) If the user passed separate ONNX paths — convert each to TRT
+    if encoder_onnx:
+        # build engine paths in cache
         enc_trt = os.path.join(cache_dir, f"{safe_name}_encoder.trt")
-        dec_trt = os.path.join(cache_dir, f"{safe_name}_decoder.trt")
+        dec_trt = None
+        if decoder_onnx:
+            dec_trt = os.path.join(cache_dir, f"{safe_name}_decoder.trt")
 
         if not os.path.exists(enc_trt):
             print(f"⤵ Converting encoder ONNX → TRT for '{name}'")
             onnx_to_trt_engine(encoder_onnx, enc_trt)
-        if not os.path.exists(dec_trt):
+
+        if decoder_onnx and not os.path.exists(dec_trt):
             print(f"⤵ Converting decoder ONNX → TRT for '{name}'")
             onnx_to_trt_engine(decoder_onnx, dec_trt)
 
-        # now wrap both engines into your WhisperTRT class
+        # now wrap one or two engines into your WhisperTRT class
         return WhisperTRTBuilder.load_from_trt(
-            enc_trt, dec_trt, name=name, verbose=verbose
+            encoder_path=enc_trt,
+            decoder_path=dec_trt,
+            name=name,
+            verbose=verbose,
         )
 
     # 2) Torch2TRT .pth path → use existing builder
@@ -763,12 +788,5 @@ def load_trt_model(
         print(f"⚙️  Building TRT-optimized .pth for '{name}' → {path}")
         builder_cls.build(path, verbose=verbose)
 
-    # Log the current quantization / precision mode
-    logger.debug(
-        "WhisperTRTBuilder settings before loading model: quant_mode=%s, fp16_mode=%s",
-        WhisperTRTBuilder.quant_mode,
-        WhisperTRTBuilder.fp16_mode,
-    )
-
-    # 4) Load from the .pth (this will construct separate encoder/decoder engines under the hood)
+    # 4) Otherwise load the Torch2TRT .pth or fallback to building it
     return builder_cls.load(path)
