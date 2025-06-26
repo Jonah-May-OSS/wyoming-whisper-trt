@@ -45,7 +45,6 @@ jobs:
         uses: gittools/actions/gitreleasemanager/create@81f0bc44e27a689ce858668d7a2081ac2387b605
         with:
           token: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
-          repository: ${{ github.event.repository.name }}
           milestone: ${{ steps.gitversion.outputs.MajorMinorPatch }}
           name: ${{ steps.gitversion.outputs.MajorMinorPatch }}
           assets: |
@@ -55,12 +54,10 @@ jobs:
         uses: gittools/actions/gitreleasemanager/publish@81f0bc44e27a689ce858668d7a2081ac2387b605
         with:
           token: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
-          repository: ${{ github.event.repository.name }}
           milestone: ${{ steps.gitversion.outputs.MajorMinorPatch }}
 
       - name: Close release with GitReleaseManager
         uses: gittools/actions/gitreleasemanager/close@81f0bc44e27a689ce858668d7a2081ac2387b605
         with:
           token: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
-          repository: ${{ github.event.repository.name }}
           milestone: ${{ steps.gitversion.outputs.MajorMinorPatch }}
