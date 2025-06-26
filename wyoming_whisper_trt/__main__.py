@@ -27,7 +27,7 @@ from .handler import WhisperTrtEventHandler
 from whisper_trt.cache import get_cache_dir, make_cache_dir
 from whisper_trt.utils import check_file_md5, download_file
 from whisper_trt import MODEL_FILENAMES
-from huggingface_hub import hf_hub_download
+from huggingface_hub import list_repo_files, hf_hub_download
 
 from whisper_trt import load_trt_model, WhisperTRT, WhisperTRTBuilder
 
@@ -235,6 +235,39 @@ def fetch_model_source(model_name: str, download_dir: Path) -> Optional[Path]:
     return None
 
 
+def fetch_hf_onnx(model_name: str, download_dir: Path) -> Tuple[Path, Optional[Path]]:
+    """
+    Returns (primary_onnx, secondary_onnx_or_None).
+    If the repo contains exactly one .onnx, secondary is None.
+    If it contains separate encoder/decoder onnx, both will be set.
+    Otherwise raises.
+    """
+    files = list_repo_files(model_name)
+    onnxs = [f for f in files if f.lower().endswith(".onnx")]
+
+    # case A: exactly one ONNX → monolithic
+    if len(onnxs) == 1:
+        fname = onnxs[0]
+        local = hf_hub_download(
+            repo_id=model_name, filename=fname, local_dir=str(download_dir)
+        )
+        return Path(local), None
+
+    # case B: look for 'encoder' / 'decoder'
+    enc = next((f for f in onnxs if "encoder" in f.lower()), None)
+    dec = next((f for f in onnxs if "decoder" in f.lower()), None)
+    if enc and dec:
+        enc_local = hf_hub_download(
+            repo_id=model_name, filename=enc, local_dir=str(download_dir)
+        )
+        dec_local = hf_hub_download(
+            repo_id=model_name, filename=dec, local_dir=str(download_dir)
+        )
+        return Path(enc_local), Path(dec_local)
+
+    raise RuntimeError(f"Cannot find suitable ONNX exports in '{model_name}': {onnxs}")
+
+
 async def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Whisper TRT ASR Server")
@@ -342,21 +375,44 @@ async def main() -> None:
             WhisperTRTBuilder.quant_mode = "fp32"
             WhisperTRTBuilder.fp16_mode = False
 
-        # if it’s an ONNX file, pass build=True so load_trt_model will convert it:
-        logger.info(f"Loading Whisper TRT model '{model_name}'...")
-        source_path = fetch_model_source(model_name, download_path)
-        if source_path is None:
-            if model_name not in MODEL_FILENAMES:
-                logger.error(
-                    "Model '%s' is not one of our built-ins and no ONNX was found.",
-                    model_name,
-                )
+        # 1) Try built-in .pth first
+        if model_name in MODEL_FILENAMES:
+            pth_path = download_path / MODEL_FILENAMES[model_name]
+            logger.info(
+                "Loading built-in Torch2TRT model '%s' → %s", model_name, pth_path
+            )
+            trt_model = load_trt_model(model_name, path=str(pth_path), build=True)
+        else:
+            # 2) Otherwise fetch ONNX(s) from HF and decide single vs split
+            logger.info("Fetching ONNX export from HuggingFace for '%s' …", model_name)
+            try:
+                primary_onnx, secondary_onnx = fetch_hf_onnx(model_name, download_path)
+            except Exception as e:
+                logger.error("Could not fetch ONNX for '%s': %s", model_name, e)
                 sys.exit(1)
-            source_path = download_path / MODEL_FILENAMES[model_name]
 
-        logger.info("Loading Whisper TRT model '%s' from %s …", model_name, source_path)
-        trt_model = load_trt_model(model_name, path=str(source_path), build=True)
-        logger.info("Whisper TRT model '%s' loaded successfully.", model_name)
+            if secondary_onnx is None:
+                # monolithic ONNX → one TRT engine
+                logger.info(
+                    "Converting single ONNX → TRT and loading: %s", primary_onnx
+                )
+                trt_model = load_trt_model(
+                    model_name, path=str(primary_onnx), build=True
+                )
+            else:
+                # split ONNX → two TRT engines
+                logger.info(
+                    "Converting split ONNX → TRT (enc=%s dec=%s) and loading",
+                    primary_onnx,
+                    secondary_onnx,
+                )
+                trt_model = load_trt_model(
+                    model_name,
+                    encoder_onnx=str(primary_onnx),
+                    decoder_onnx=str(secondary_onnx),
+                    build=True,
+                )
+        logger.info("Whisper TRT model '%s' is ready.", model_name)
     except Exception as e:
         logger.error(f"Failed to load Whisper TRT model '{model_name}': {e}")
         sys.exit(1)
