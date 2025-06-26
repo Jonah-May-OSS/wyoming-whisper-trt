@@ -3,7 +3,13 @@ services:
     image: captnspdr/wyoming-whisper-trt:latest-igpu
     container_name: wyoming-whisper-trt
     environment:
-      MODEL: "base"
+      - MODEL=base
+      - LANGUAGE=auto
+      - DEVICE=cuda
+      - DATA_DIR=/data
+      - DOWNLOAD_DIR=/data/models
+    volumes:
+      - wyoming-data:/data
     restart: unless-stopped
     network_mode: host
     runtime: nvidia
