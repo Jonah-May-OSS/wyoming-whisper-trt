@@ -29,7 +29,7 @@ from whisper_trt.utils import check_file_md5, download_file
 from whisper_trt import MODEL_FILENAMES
 from huggingface_hub import hf_hub_download
 
-from whisper_trt import load_trt_model, WhisperTRT
+from whisper_trt import load_trt_model, WhisperTRT, WhisperTRTBuilder
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -297,9 +297,6 @@ async def main() -> None:
         version=f"%(prog)s {__version__}",
         help="Print version and exit",
     )
-
-    # Restored/added argument for default language selection
-
     parser.add_argument(
         "--language",
         type=str,
@@ -310,20 +307,16 @@ async def main() -> None:
     args = parser.parse_args()
 
     # Setup logging
-
     setup_logging(args.debug, args.log_format)
 
     # Normalize model name
-
     model_name = normalize_model_name(args.model)
 
     # Determine if the model is language-specific
-
     model_is_lang_specific = is_language_specific(model_name)
     logger.debug(f"Model '{model_name}' is language-specific: {model_is_lang_specific}")
 
     # Set download directory to first data directory if not specified
-
     if not args.download_dir:
         args.download_dir = args.data_dir[0]
         logger.debug(
@@ -336,33 +329,41 @@ async def main() -> None:
     except OSError as e:
         logger.error(f"Failed to create download directory at '{download_path}': {e}")
         sys.exit(1)
-    # Load Whisper TRT model
 
+    # Load Whisper TRT model
     try:
         source_path = fetch_model_source(model_name, download_path)
-        # if it’s an ONNX file, pass build=True so load_trt_model will convert it:
 
+        # Set TensorRT precision mode
+        if args.compute_type == "int8":
+            WhisperTRTBuilder.quant_mode = "int8"
+            WhisperTRTBuilder.fp16_mode = False
+        elif args.compute_type == "float16":
+            WhisperTRTBuilder.quant_mode = "fp16"
+            WhisperTRTBuilder.fp16_mode = True
+        else:  # "default" → full precision (FP32)
+            WhisperTRTBuilder.quant_mode = "fp32"
+            WhisperTRTBuilder.fp16_mode = False
+
+        # if it’s an ONNX file, pass build=True so load_trt_model will convert it:
         logger.info(f"Loading Whisper TRT model '{model_name}'...")
         trt_model = load_trt_model(model_name, path=str(source_path), build=True)
         logger.info(f"Whisper TRT model '{model_name}' loaded successfully.")
     except Exception as e:
         logger.error(f"Failed to load Whisper TRT model '{model_name}': {e}")
         sys.exit(1)
-    # Extract supported languages
 
+    # Extract supported languages
     languages = extract_languages(trt_model, model_name)
 
     # Build Wyoming Info
-
     wyoming_info = build_wyoming_info(model_name, languages)
 
     # Initialize asyncio lock for model access
-
     model_lock = asyncio.Lock()
     logger.debug("Initialized asyncio lock for model access.")
 
     # Create the event handler factory, passing the user-defined language
-
     handler_factory_func = partial(
         WhisperTrtEventHandler,
         wyoming_info=wyoming_info,
@@ -375,7 +376,6 @@ async def main() -> None:
     )
 
     # Run the server
-
     try:
         logger.info("Starting the Whisper TRT ASR server...")
         await run_server(args.uri, handler_factory_func)
