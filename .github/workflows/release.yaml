@@ -1,4 +1,7 @@
 name: Release
+permissions:
+  contents: write
+  
 on:
   push:
     branches:
@@ -9,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           tags: true
@@ -23,12 +26,12 @@ jobs:
         run: zip -x '*.git*' -r release.zip .
 
       - name: Install GitReleaseManager
-        uses: gittools/actions/gitreleasemanager/setup@v0.20.x
+        uses: gittools/actions/gitreleasemanager/setup@v3.2.1
         with:
           versionSpec: '0.20.x'
 
       - name: Create release with GitReleaseManager
-        uses: gittools/actions/gitreleasemanager/create@v0.20.x
+        uses: gittools/actions/gitreleasemanager/create@v3.2.1
         with:
           token:      ${{ secrets.PERSONAL_GITHUB_TOKEN }}
           owner:      ${{ github.repository_owner }}
@@ -40,7 +43,7 @@ jobs:
             release.zip
 
       - name: Publish release
-        uses: gittools/actions/gitreleasemanager/publish@v0.20.x
+        uses: gittools/actions/gitreleasemanager/publish@v3.2.1
         with:
           token:      ${{ secrets.PERSONAL_GITHUB_TOKEN }}
           owner:      ${{ github.repository_owner }}
@@ -48,7 +51,7 @@ jobs:
           milestone:  ${{ steps.ver.outputs.VERSION }}
 
       - name: Close release
-        uses: gittools/actions/gitreleasemanager/close@v0.20.x
+        uses: gittools/actions/gitreleasemanager/close@v3.2.1
         with:
           token:      ${{ secrets.PERSONAL_GITHUB_TOKEN }}
           owner:      ${{ github.repository_owner }}
