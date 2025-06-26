@@ -199,7 +199,14 @@ async def run_server(uri: str, handler_factory_func, *args, **kwargs) -> None:
         logger.error(f"Server encountered an error: {e}")
         raise
     finally:
-        await server.close()
+        logger.info("Shutting down server...")
+        # Attempt to gracefully shut down the server
+        try:
+            await server.shutdown()
+        except AttributeError:
+            # Fallback to stop() if available, or just log
+            if hasattr(server, "stop"):
+                await server.stop()
         logger.info("Server has been shut down.")
 
 
