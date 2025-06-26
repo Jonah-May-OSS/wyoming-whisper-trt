@@ -1,4 +1,3 @@
----
 name: Release
 on:
   push:
@@ -7,69 +6,51 @@ on:
 
 jobs:
   release:
-    name: Release
-    if: startsWith(github.ref, 'refs/heads/release')
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@09d2acae674a48949e3602304ab46fd20ae0c42f
+      - name: Checkout
+        uses: actions/checkout@v3
         with:
           fetch-depth: 0
           tags: true
-          
+
+      - name: Extract version from branch
+        id: ver
+        run: |
+          echo "VERSION=${GITHUB_REF_NAME#release/}" >> $GITHUB_OUTPUT
+
       - name: Zip Release
         run: zip -x '*.git*' -r release.zip .
 
-      - name: Extract owner and repo
-        uses: winterjung/split@c9add84449df5452f56c8bc843653cec14eefbf4
-        id: repo
-        with:
-          separator: '/'
-          msg: ${{ github.repository }}
-
-      - name: Install GitVersion
-        uses: gittools/actions/gitversion/setup@81f0bc44e27a689ce858668d7a2081ac2387b605
-        with:
-          versionSpec: '6.x'
-
-      - name: Use GitVersion
-        uses: gittools/actions/gitversion/execute@81f0bc44e27a689ce858668d7a2081ac2387b605
-        id: gitversion
-        with:
-          useConfigFile: true
-          configFilePath: GitVersion.yml
-          arguments: >
-            -output json
-            -verbosity quiet
-
       - name: Install GitReleaseManager
-        uses: gittools/actions/gitreleasemanager/setup@81f0bc44e27a689ce858668d7a2081ac2387b605
+        uses: gittools/actions/gitreleasemanager/setup@v0.20.x
         with:
           versionSpec: '0.20.x'
 
       - name: Create release with GitReleaseManager
-        uses: gittools/actions/gitreleasemanager/create@81f0bc44e27a689ce858668d7a2081ac2387b605
+        uses: gittools/actions/gitreleasemanager/create@v0.20.x
         with:
-          token: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
-          owner: ${{ steps.repo.outputs._0 }}
-          repository: ${{ steps.repo.outputs._1 }}
-          milestone: ${{ steps.gitversion.outputs.MajorMinorPatch }}
-          name: ${{ steps.gitversion.outputs.MajorMinorPatch }}
-          assets: |
+          token:      ${{ secrets.PERSONAL_GITHUB_TOKEN }}
+          owner:      ${{ github.repository_owner }}
+          repository: ${{ github.event.repository.name }}
+          milestone:  ${{ steps.ver.outputs.VERSION }}
+          name:       ${{ steps.ver.outputs.VERSION }}
+          tagName:    ${{ steps.ver.outputs.VERSION }}
+          assets:     |
             release.zip
 
-      - name: Publish release with GitReleaseManager
-        uses: gittools/actions/gitreleasemanager/publish@81f0bc44e27a689ce858668d7a2081ac2387b605
+      - name: Publish release
+        uses: gittools/actions/gitreleasemanager/publish@v0.20.x
         with:
-          token: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
-          owner: ${{ steps.repo.outputs._0 }}
-          repository: ${{ steps.repo.outputs._1 }}
-          milestone: ${{ steps.gitversion.outputs.MajorMinorPatch }}
+          token:      ${{ secrets.PERSONAL_GITHUB_TOKEN }}
+          owner:      ${{ github.repository_owner }}
+          repository: ${{ github.event.repository.name }}
+          milestone:  ${{ steps.ver.outputs.VERSION }}
 
-      - name: Close release with GitReleaseManager
-        uses: gittools/actions/gitreleasemanager/close@81f0bc44e27a689ce858668d7a2081ac2387b605
+      - name: Close release
+        uses: gittools/actions/gitreleasemanager/close@v0.20.x
         with:
-          token: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
-          owner: ${{ steps.repo.outputs._0 }}
-          repository: ${{ steps.repo.outputs._1 }}
-          milestone: ${{ steps.gitversion.outputs.MajorMinorPatch }}
+          token:      ${{ secrets.PERSONAL_GITHUB_TOKEN }}
+          owner:      ${{ github.repository_owner }}
+          repository: ${{ github.event.repository.name }}
+          milestone:  ${{ steps.ver.outputs.VERSION }}
