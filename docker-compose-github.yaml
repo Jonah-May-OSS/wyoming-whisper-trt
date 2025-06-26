@@ -4,6 +4,8 @@ services:
     container_name: wyoming-whisper-trt
     ports:
       - 10300:10300
+    environment:
+      MODEL: "base"
     restart: unless-stopped
     deploy:
       resources:
