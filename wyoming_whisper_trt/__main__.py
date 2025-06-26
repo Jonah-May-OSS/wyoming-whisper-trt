@@ -95,14 +95,12 @@ def is_language_specific(model_name: str) -> bool:
 
 def extract_languages(model: WhisperTRT, model_name: str) -> List[str]:
     """
-    Extracts supported languages from the Whisper TRT model.
-
-    Args:
-        model (WhisperTRT): The Whisper TRT model instance.
-        model_name (str): The name of the model.
-
+    Determines the list of supported language codes for a Whisper TRT model.
+    
+    If the model name indicates a language-specific variant (e.g., contains a language suffix), returns that language code. Otherwise, attempts to retrieve supported languages from the model instance; defaults to English if unavailable or on error.
+    
     Returns:
-        List[str]: A list of supported language codes.
+        List[str]: Supported language codes for the model.
     """
     if is_language_specific(model_name):
         # For example, "small.en" -> "en"
@@ -180,13 +178,9 @@ def build_wyoming_info(model_name: str, languages: List[str]) -> Info:
 
 async def run_server(uri: str, handler_factory_func, *args, **kwargs) -> None:
     """
-    Initializes and runs the asynchronous server.
-
-    Args:
-        uri (str): The URI to bind the server to.
-        handler_factory_func: The handler factory function.
-        *args: Variable length argument list.
-        **kwargs: Arbitrary keyword arguments.
+    Start and manage the lifecycle of an asynchronous server bound to the specified URI.
+    
+    Runs the server using the provided handler factory function and arguments, handling initialization, runtime errors, and graceful shutdown.
     """
     try:
         server = AsyncServer.from_uri(uri)
@@ -205,6 +199,18 @@ async def run_server(uri: str, handler_factory_func, *args, **kwargs) -> None:
 
 
 def fetch_model_source(model_name: str, download_dir: Path) -> Path:
+    """
+    Obtain the local file path for a model, downloading it if necessary.
+    
+    If the model name matches a built-in model, returns the corresponding local PTH file path. Otherwise, treats the model name as a Hugging Face repository ID, downloading the ONNX model file into the specified directory if it does not already exist.
+    
+    Parameters:
+        model_name (str): The name of the model, either a built-in identifier or a Hugging Face repo ID.
+        download_dir (Path): Directory where the model file should be located or downloaded.
+    
+    Returns:
+        Path: The local file path to the model (PTH or ONNX).
+    """
     download_dir.mkdir(exist_ok=True, parents=True)
     # 1) If it’s one of the built-ins, keep your existing PTH filename:
 
@@ -226,7 +232,11 @@ def fetch_model_source(model_name: str, download_dir: Path) -> Path:
 
 
 async def main() -> None:
-    """Main entry point."""
+    """
+    Parses command-line arguments, initializes the Whisper TRT ASR model and server, and starts the asynchronous event loop.
+    
+    Handles model selection, device configuration, logging setup, language extraction, and server binding. Exits the process on initialization or runtime errors.
+    """
     parser = argparse.ArgumentParser(description="Whisper TRT ASR Server")
     parser.add_argument(
         "--model",

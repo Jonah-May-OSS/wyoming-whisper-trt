@@ -370,6 +370,12 @@ class WhisperTRTBuilder:
     @classmethod
     @torch.no_grad()
     def build_text_decoder_engine(cls) -> torch2trt.TRTModule:
+        """
+        Builds a TensorRT-optimized engine for the Whisper text decoder blocks using torch2trt.
+        
+        Returns:
+            torch2trt.TRTModule: The TensorRT engine module for the text decoder blocks.
+        """
         dims = cls._load_model_once()
         model_inst = load_model(cls.model).cuda().eval()
         decoder_blocks_module = _TextDecoderEngine(model_inst.decoder.blocks)
@@ -408,6 +414,12 @@ class WhisperTRTBuilder:
     @classmethod
     @torch.no_grad()
     def build_audio_encoder_engine(cls) -> torch2trt.TRTModule:
+        """
+        Builds and returns a TensorRT-optimized audio encoder engine for the Whisper model.
+        
+        Returns:
+            torch2trt.TRTModule: The TensorRT engine module for the audio encoder.
+        """
         dims = cls._load_model_once()
         model_inst = load_model(cls.model).cuda().eval()
         encoder_module = _AudioEncoderEngine(
@@ -491,6 +503,15 @@ class WhisperTRTBuilder:
     @classmethod
     @torch.no_grad()
     def load(cls, trt_model_path: str) -> WhisperTRT:
+        """
+        Load a WhisperTRT model from a saved checkpoint file.
+        
+        Parameters:
+        	trt_model_path (str): Path to the saved checkpoint file containing the TensorRT-optimized model.
+        
+        Returns:
+        	WhisperTRT: An instance of the WhisperTRT model reconstructed from the checkpoint.
+        """
         checkpoint = torch.load(trt_model_path)
         dims = ModelDimensions(**checkpoint["dims"])
         # Audio encoder.
@@ -533,6 +554,19 @@ class WhisperTRTBuilder:
     ) -> WhisperTRT:
         # 1) load the raw engine
 
+        """
+        Load a WhisperTRT model from a raw TensorRT engine file and reconstruct its components.
+        
+        This method loads a serialized TensorRT engine, recovers model dimensions and tokenizer from the original Whisper model, extracts necessary state (embeddings, layer normalization, mask), and assembles the high-level WhisperTRT instance for inference.
+        
+        Parameters:
+            engine_path (str): Path to the serialized TensorRT engine file.
+            name (str): Name of the Whisper model variant to recover dimensions and tokenizer.
+            verbose (bool, optional): If True, enables verbose output in the WhisperTRT instance.
+        
+        Returns:
+            WhisperTRT: A fully constructed WhisperTRT model ready for inference.
+        """
         trt_mod = torch2trt.TRTModule().cuda()
         with open(engine_path, "rb") as f:
             trt_mod.load_engine(f.read())
@@ -674,7 +708,17 @@ MODEL_BUILDERS = {
 
 def onnx_to_trt_engine(onnx_path: str, engine_path: str):
     """
-    Parse an ONNX file and serialize out a TensorRT engine.
+    Converts an ONNX model file to a serialized TensorRT engine file.
+    
+    Parameters:
+        onnx_path (str): Path to the input ONNX model file.
+        engine_path (str): Path where the serialized TensorRT engine will be saved.
+    
+    Returns:
+        str: The path to the saved TensorRT engine file.
+    
+    Raises:
+        RuntimeError: If the ONNX model cannot be parsed.
     """
     builder = trt.Builder(TRT_LOGGER)
     network = builder.create_network(
@@ -699,12 +743,18 @@ def load_trt_model(
     name: str, path: Optional[str] = None, build: bool = True, verbose: bool = False
 ) -> WhisperTRT:
     """
-    Load or build a TensorRT‐optimized Whisper model.
-
-    Supports:
-     - Built-in variants via MODEL_BUILDERS (producing .pth via Torch2TRT).
-     - Arbitrary ONNX files (converting ONNX→.trt engine once).
-     - Generic HF fallback via WhisperTRTBuilder if you like.
+    Load or build a TensorRT-optimized Whisper model from a specified path or model name.
+    
+    Supports loading from built-in model variants, converting ONNX files to TensorRT engines, or using a generic Hugging Face model fallback. If the required model file does not exist and `build` is True, it will build the model checkpoint. Returns a `WhisperTRT` instance ready for inference.
+    
+    Parameters:
+        name (str): Model name or identifier.
+        path (Optional[str]): Path to a model checkpoint (.pth), TensorRT engine (.trt), or ONNX file (.onnx). If None, uses the default path for the given model name.
+        build (bool): Whether to build the model if the checkpoint or engine does not exist.
+        verbose (bool): Whether to enable verbose output during building or loading.
+    
+    Returns:
+        WhisperTRT: An instance of the TensorRT-optimized Whisper model.
     """
     cache_dir = get_cache_dir()
     make_cache_dir()
