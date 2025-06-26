@@ -11,7 +11,13 @@ from typing import Optional
 
 import numpy as np
 import torch
-from wyoming.asr import Transcribe, Transcript, TranscriptStart, TranscriptChunk, TranscriptStop
+from wyoming.asr import (
+    Transcribe,
+    Transcript,
+    TranscriptStart,
+    TranscriptChunk,
+    TranscriptStop,
+)
 from wyoming.audio import AudioChunk, AudioStop
 from wyoming.event import Event
 from wyoming.info import Describe, Info
@@ -174,9 +180,7 @@ class WhisperTrtEventHandler(AsyncEventHandler):
 
         # 1) Emit transcript-start
         logger.debug("➡️  Emitting TranscriptStart")
-        await self.write_event(
-            TranscriptStart(language=self._language).event()
-        )
+        await self.write_event(TranscriptStart(language=self._language).event())
 
         # Get the WAV bytes and convert to numpy
         wav_bytes = self._wav_buffer.getvalue()
@@ -189,37 +193,28 @@ class WhisperTrtEventHandler(AsyncEventHandler):
 
                 # pass stream=True to get interim chunks if your model supports it
                 result = await loop.run_in_executor(
-                    None,
-                    lambda: self.model.transcribe(audio_np, self._language, True)
+                    None, lambda: self.model.transcribe(audio_np, self._language, True)
                 )
 
                 # 3) Emit each interim chunk
                 for chunk_text in result.get("chunks", []):
                     logger.debug("➡️  Emitting TranscriptChunk: %r", chunk_text)
-                    await self.write_event(
-                        TranscriptChunk(text=chunk_text).event()
-                    )
+                    await self.write_event(TranscriptChunk(text=chunk_text).event())
 
                 # 4) Emit backward‐compatible full transcript
                 final_text = result.get("text", "")
                 logger.debug("➡️  Emitting full Transcript: %r", final_text)
-                await self.write_event(
-                    Transcript(text=final_text).event()
-                )
+                await self.write_event(Transcript(text=final_text).event())
 
                 logger.debug("Completed transcription request.")
             except Exception as e:
                 logger.error("Transcription failed: %s", e)
                 # still emit a stop so client won’t hang
-                await self.write_event(
-                    Transcript(text="Transcription failed.").event()
-                )
+                await self.write_event(Transcript(text="Transcription failed.").event())
 
         # 5) Emit transcript-stop
         logger.debug("➡️  Emitting TranscriptStop")
-        await self.write_event(
-            TranscriptStop().event()
-        )
+        await self.write_event(TranscriptStop().event())
 
         # Reset to default language and clean up
         self._language = (

@@ -241,7 +241,7 @@ class WhisperTRT(nn.Module):
                     logger.debug("Tokenizer set to auto language detection.")
             else:
                 logger.warning("No tokenizer found; transcription may be degraded.")
-            
+
             # Preallocate
             out_tokens = torch.empty((1, max_len), dtype=torch.long).cuda()
             out_tokens[0, 0] = self.tokenizer.sot
@@ -257,7 +257,9 @@ class WhisperTRT(nn.Module):
 
                 # if streaming mode, decode interim text so far
                 if stream:
-                    interim_tokens = out_tokens[:, 2:cur_len]  # skip <sot> and <notimestamps>
+                    interim_tokens = out_tokens[
+                        :, 2:cur_len
+                    ]  # skip <sot> and <notimestamps>
                     interim_text = self.tokenizer.decode(
                         list(interim_tokens.flatten().cpu().numpy())
                     )
