@@ -8,7 +8,6 @@ This script initializes the Whisper TRT model, sets up the server, and handles c
 
 # SDPA fix for Whisper 20240930 and newer per https://github.com/openai/whisper/discussions/2423
 from whisper.model import disable_sdpa
-disable_sdpa.enable()
 
 import argparse
 import asyncio
@@ -354,4 +353,6 @@ def run() -> None:
 
 
 if __name__ == "__main__":
-    run()
+    # SDPA fix for Whisper 20240930 and newer per https://github.com/openai/whisper/discussions/2423
+    with disable_sdpa():
+        run()
