@@ -529,43 +529,40 @@ class WhisperTRTBuilder:
     @classmethod
     @torch.no_grad()
     def load_from_trt(
-        cls, engine_path: str, name: str, verbose: bool = False
+        cls,
+        encoder_engine_path: str,
+        decoder_engine_path: str,
+        name: str,
+        verbose: bool = False,
     ) -> WhisperTRT:
-        # 1) load the raw engine
+        # 1) Load encoder engine
+        enc_mod = torch2trt.TRTModule().cuda()
+        with open(encoder_engine_path, "rb") as f:
+            enc_mod.load_engine(f.read())
 
-        trt_mod = torch2trt.TRTModule().cuda()
-        with open(engine_path, "rb") as f:
-            trt_mod.load_engine(f.read())
-        # 2) recover model dims & tokenizer
+        # 2) Load decoder engine
+        dec_mod = torch2trt.TRTModule().cuda()
+        with open(decoder_engine_path, "rb") as f:
+            dec_mod.load_engine(f.read())
 
+        # 3) Reconstruct dims and tokenizer
         model_inst = load_model(name).cuda().eval()
         dims = model_inst.dims
-        tokenizer = whisper.tokenizer.get_tokenizer(
-            multilingual=("." not in name),
-            num_languages=getattr(model_inst, "num_languages", 1),
-            language=None,
-            task="transcribe",
-        )
+        tokenizer = cls.get_tokenizer()
 
-        # 3) pull extra state from FP32 model (same as your .build())
-
-        audio_pos_embed = model_inst.encoder.positional_embedding
-        text_token_emb = nn.Embedding(dims.n_vocab, dims.n_text_state)
-        text_token_emb.load_state_dict(model_inst.decoder.token_embedding.state_dict())
-        text_pos_embed = model_inst.decoder.positional_embedding
-        text_ln = LayerNorm(dims.n_text_state)
-        text_ln.load_state_dict(model_inst.decoder.ln.state_dict())
-        text_mask = model_inst.decoder.mask
-
-        # 4) assemble the two TRT wrappers
-
-        encoder = AudioEncoderTRT(trt_mod, audio_pos_embed)
+        # 4) Build wrappers
+        encoder = AudioEncoderTRT(enc_mod, model_inst.encoder.positional_embedding)
+        text_emb = nn.Embedding(dims.n_vocab, dims.n_text_state)
+        text_emb.load_state_dict(model_inst.decoder.token_embedding.state_dict())
         decoder = TextDecoderTRT(
-            trt_mod, text_token_emb, text_pos_embed, text_ln, text_mask
+            dec_mod,
+            text_emb,
+            model_inst.decoder.positional_embedding,
+            model_inst.decoder.ln,
+            model_inst.decoder.mask,
         )
 
-        # 5) wrap into your high-level class
-
+        # 5) Wrap into WhisperTRT
         return (
             WhisperTRT(dims, encoder, decoder, tokenizer, verbose=verbose).cuda().eval()
         )
@@ -672,7 +669,13 @@ MODEL_BUILDERS = {
 }
 
 
-def onnx_to_trt_engine(onnx_path: str, engine_path: str, max_workspace_size: int = 1 << 30, fp16_mode: bool = True, int8_mode: bool = False):
+def onnx_to_trt_engine(
+    onnx_path: str,
+    engine_path: str,
+    max_workspace_size: int = 1 << 30,
+    fp16_mode: bool = True,
+    int8_mode: bool = False,
+):
     """
     Parse an ONNX file and serialize out a TensorRT engine.
     """
