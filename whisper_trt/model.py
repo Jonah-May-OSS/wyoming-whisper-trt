@@ -202,8 +202,11 @@ class WhisperTRT(nn.Module):
 
     @torch.no_grad()
     def transcribe(
-        self, audio: str | np.ndarray, language: str = "auto"
-    ) -> Dict[str, str]:
+        self,
+        audio: str | np.ndarray,
+        language: str = "auto",
+        stream: bool = False,
+    ) -> Dict[str, Any]:
         start_time = time.perf_counter()
         # If audio is a string, load it; if a NumPy array and not floating, convert.
 
@@ -212,6 +215,7 @@ class WhisperTRT(nn.Module):
         elif isinstance(audio, np.ndarray):
             if not np.issubdtype(audio.dtype, np.floating):
                 audio = audio.astype(np.float32) / 32768.0
+
         mel = whisper.audio.log_mel_spectrogram(audio, padding=whisper.audio.N_SAMPLES)[
             None, ...
         ].cuda()
@@ -219,8 +223,12 @@ class WhisperTRT(nn.Module):
             mel = mel[:, :, : whisper.audio.N_FRAMES]
         load_time = time.perf_counter() - start_time
 
+        chunks: List[str] = []
+        max_len = self.dims.n_text_ctx + 1
+
         with torch.cuda.stream(self.stream):
             audio_features = self.embed_audio(mel)
+
             if self.tokenizer is not None:
                 if language.lower() != "auto":
                     lang_code = language.lower()
@@ -233,27 +241,47 @@ class WhisperTRT(nn.Module):
                     logger.debug("Tokenizer set to auto language detection.")
             else:
                 logger.warning("No tokenizer found; transcription may be degraded.")
-            # --- Optimized Decoding Loop (Preallocated) ---
-
-            max_len = self.dims.n_text_ctx + 1
+            
+            # Preallocate
             out_tokens = torch.empty((1, max_len), dtype=torch.long).cuda()
             out_tokens[0, 0] = self.tokenizer.sot
             cur_len = 1
             decode_start = time.perf_counter()
+
             for i in range(1, max_len):
                 current_tokens = out_tokens[:, :cur_len]
                 logits = self.logits(current_tokens, audio_features)
                 next_token = logits.argmax(dim=-1)[:, -1]
                 out_tokens[0, cur_len] = next_token
                 cur_len += 1
+
+                # if streaming mode, decode interim text so far
+                if stream:
+                    interim_tokens = out_tokens[:, 2:cur_len]  # skip <sot> and <notimestamps>
+                    interim_text = self.tokenizer.decode(
+                        list(interim_tokens.flatten().cpu().numpy())
+                    )
+                    interim_text = re.sub(
+                        r"<\|transcribe\|><\|notimestamps\|>", "", interim_text
+                    ).strip()
+                    chunks.append(interim_text)
+
                 if next_token.item() == self.tokenizer.eot:
                     break
-            tokens = out_tokens[:, 2 : cur_len - 1]
-            text = self.tokenizer.decode(list(tokens.flatten().cpu().numpy()))
-            text = re.sub(r"<\|transcribe\|><\|notimestamps\|>", "", text).strip()
+
+            # after loop, build final text
+            final_tokens = out_tokens[:, 2 : cur_len - 1]
+            final_text = self.tokenizer.decode(
+                list(final_tokens.flatten().cpu().numpy())
+            )
+            final_text = re.sub(
+                r"<\|transcribe\|><\|notimestamps\|>", "", final_text
+            ).strip()
             decode_time = time.perf_counter() - decode_start
+
         self.stream.synchronize()
         total_time = time.perf_counter() - start_time
+
         if self.verbose:
             logger.info(
                 "Audio load & mel: %.1f ms, Decoding: %.1f ms, Total: %.1f ms",
@@ -261,7 +289,12 @@ class WhisperTRT(nn.Module):
                 decode_time * 1000,
                 total_time * 1000,
             )
-        return {"text": text}
+
+        if stream:
+            logger.debug("⏳ Interim chunk[%d]=%r", i, interim_text)
+            return {"chunks": chunks, "text": final_text}
+        else:
+            return {"text": final_text}
 
     @torch.no_grad()
     def transcribe_batch(

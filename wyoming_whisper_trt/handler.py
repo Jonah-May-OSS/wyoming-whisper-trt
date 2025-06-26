@@ -11,7 +11,7 @@ from typing import Optional
 
 import numpy as np
 import torch
-from wyoming.asr import Transcribe, Transcript
+from wyoming.asr import Transcribe, Transcript, TranscriptStart, TranscriptChunk, TranscriptStop
 from wyoming.audio import AudioChunk, AudioStop
 from wyoming.event import Event
 from wyoming.info import Describe, Info
@@ -156,10 +156,13 @@ class WhisperTrtEventHandler(AsyncEventHandler):
         self._wave_writer.writeframes(chunk.audio)
 
     async def _handle_audio_stop(self) -> None:
-        """Handles an AudioStop event by transcribing the recorded audio from memory."""
+        """Handles an AudioStop event by transcribing the recorded audio from memory,
+        emitting Wyoming partial‐streaming events."""
         if self._wave_writer is None:
             logger.warning("AudioStop received but no audio was recorded.")
             return
+
+        # Finalize the in‐memory WAV buffer
         try:
             self._wave_writer.close()
             logger.debug("Finalized in-memory WAV buffer.")
@@ -168,34 +171,63 @@ class WhisperTrtEventHandler(AsyncEventHandler):
             raise
         finally:
             self._wave_writer = None
-        # Get the WAV data from memory.
 
+        # 1) Emit transcript-start
+        logger.debug("➡️  Emitting TranscriptStart")
+        await self.write_event(
+            TranscriptStart(language=self._language).event()
+        )
+
+        # Get the WAV bytes and convert to numpy
         wav_bytes = self._wav_buffer.getvalue()
-        # Convert the in-memory WAV bytes to a NumPy array.
-
         audio_np = wav_bytes_to_np_array(wav_bytes)
+
+        # 2) Do transcription under lock, potentially with streaming support
         async with self.model_lock:
             try:
                 loop = asyncio.get_event_loop()
+
+                # pass stream=True to get interim chunks if your model supports it
                 result = await loop.run_in_executor(
-                    None, self.model.transcribe, audio_np, self._language
+                    None,
+                    lambda: self.model.transcribe(audio_np, self._language, True)
                 )
-                text = result.get("text", "")
-                logger.info("Transcription result: %s", text)
-                await self.write_event(Transcript(text=text).event())
+
+                # 3) Emit each interim chunk
+                for chunk_text in result.get("chunks", []):
+                    logger.debug("➡️  Emitting TranscriptChunk: %r", chunk_text)
+                    await self.write_event(
+                        TranscriptChunk(text=chunk_text).event()
+                    )
+
+                # 4) Emit backward‐compatible full transcript
+                final_text = result.get("text", "")
+                logger.debug("➡️  Emitting full Transcript: %r", final_text)
+                await self.write_event(
+                    Transcript(text=final_text).event()
+                )
+
                 logger.debug("Completed transcription request.")
             except Exception as e:
                 logger.error("Transcription failed: %s", e)
-                await self.write_event(Transcript(text="Transcription failed.").event())
-        # Reset language to CLI argument or default.
+                # still emit a stop so client won’t hang
+                await self.write_event(
+                    Transcript(text="Transcription failed.").event()
+                )
 
+        # 5) Emit transcript-stop
+        logger.debug("➡️  Emitting TranscriptStop")
+        await self.write_event(
+            TranscriptStop().event()
+        )
+
+        # Reset to default language and clean up
         self._language = (
             self.cli_args.language
             if hasattr(self.cli_args, "language")
             else self.default_language
         )
         logger.debug("Reset language to: %s", self._language)
-        # Clean up the in-memory buffer.
 
         self._wav_buffer.close()
 

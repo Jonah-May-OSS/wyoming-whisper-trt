@@ -155,6 +155,7 @@ def build_wyoming_info(model_name: str, languages: List[str]) -> Info:
                 ),
                 installed=True,
                 version=__version__,
+                supports_transcript_streaming=True,
                 models=[
                     AsrModel(
                         name=model_name,
@@ -187,20 +188,26 @@ async def run_server(uri: str, handler_factory_func, *args, **kwargs) -> None:
         *args: Variable length argument list.
         **kwargs: Arbitrary keyword arguments.
     """
-    try:
-        server = AsyncServer.from_uri(uri)
-        logger.info(f"Server initialized and listening on {uri}.")
-    except Exception as e:
-        logger.error(f"Failed to initialize server with URI '{uri}': {e}")
-        raise
+    # create the wyoming server (e.g. AsyncTcpServer)
+    server = AsyncServer.from_uri(uri)
+    logger.info(f"Server initialized and listening on {uri}.")
+
     try:
         await server.run(handler_factory_func, *args, **kwargs)
     except Exception as e:
         logger.error(f"Server encountered an error: {e}")
         raise
     finally:
-        await server.close()
-        logger.info("Server has been shut down.")
+        # tear down the underlying asyncio.Server
+        # AsyncTcpServer keeps its real listener in `.server` or `._server`
+        sock_svc = getattr(server, "server", None) or getattr(server, "_server", None)
+        if sock_svc:
+            sock_svc.close()
+            # wait for the socket to actually close
+            await sock_svc.wait_closed()
+            logger.info("Underlying listener closed.")
+        else:
+            logger.debug("No underlying server object to close.")
 
 
 async def main() -> None:
