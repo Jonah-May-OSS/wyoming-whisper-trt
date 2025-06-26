@@ -6,9 +6,20 @@
   "assignees": ["JonahMMay"],
   "labels": ["renovate"],
   "packageRules": [
-  {
-    "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
-    "automerge": true
-  }
- ]
+    {
+      "matchPackageNames": [
+        "tensorrt",
+        "tensorrt_cu12_libs",
+        "tensorrt_cu12_bindings"
+      ],
+      "groupName": "TensorRT packages",
+      "groupSlug": "tensorrt",
+      "rangeStrategy": "bump",
+      "description": "Keep all TensorRT wheels on the same version; upgrading one without the others breaks runtime."
+    },
+    {
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "automerge": true
+    }
+  ]
 }
