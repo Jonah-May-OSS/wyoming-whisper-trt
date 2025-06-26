@@ -1,21 +1,19 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended"
-  ],
+  "extends": ["config:recommended"],
   "assignees": ["JonahMMay"],
   "labels": ["renovate"],
   "packageRules": [
     {
+      "matchManagers": ["pip_requirements"],
       "matchPackageNames": [
         "tensorrt",
-        "tensorrt_cu12_libs",
-        "tensorrt_cu12_bindings"
+        "tensorrt-cu12-libs",
+        "tensorrt-cu12-bindings"
       ],
-      "groupName": "TensorRT packages",
+      "groupName": "TensorRT & related packages",
       "groupSlug": "tensorrt",
-      "rangeStrategy": "bump",
-      "description": "Keep all TensorRT wheels on the same version; upgrading one without the others breaks runtime."
+      "rangeStrategy": "bump"
     },
     {
       "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
