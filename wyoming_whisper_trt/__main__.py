@@ -331,8 +331,6 @@ async def main() -> None:
 
     # Load Whisper TRT model
     try:
-        source_path = fetch_model_source(model_name, download_path)
-
         # Set TensorRT precision mode
         if args.compute_type == "int8":
             WhisperTRTBuilder.quant_mode = "int8"
@@ -346,13 +344,19 @@ async def main() -> None:
 
         # if it’s an ONNX file, pass build=True so load_trt_model will convert it:
         logger.info(f"Loading Whisper TRT model '{model_name}'...")
+        source_path = fetch_model_source(model_name, download_path)
         if source_path is None:
-            # No ONNX on HF: let load_trt_model build from the PyTorch checkpoint
-            trt_model = load_trt_model(model_name, path=None, build=True)
-        else:
-            # We got an ONNX file; let load_trt_model convert it
-            trt_model = load_trt_model(model_name, path=str(source_path), build=True)
-        logger.info(f"Whisper TRT model '{model_name}' loaded successfully.")
+            if model_name not in MODEL_FILENAMES:
+                logger.error(
+                    "Model '%s' is not one of our built-ins and no ONNX was found.",
+                    model_name,
+                )
+                sys.exit(1)
+            source_path = download_path / MODEL_FILENAMES[model_name]
+
+        logger.info("Loading Whisper TRT model '%s' from %s …", model_name, source_path)
+        trt_model = load_trt_model(model_name, path=str(source_path), build=True)
+        logger.info("Whisper TRT model '%s' loaded successfully.", model_name)
     except Exception as e:
         logger.error(f"Failed to load Whisper TRT model '{model_name}': {e}")
         sys.exit(1)
