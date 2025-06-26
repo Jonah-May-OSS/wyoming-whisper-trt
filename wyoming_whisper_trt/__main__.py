@@ -216,12 +216,20 @@ def fetch_model_source(model_name: str, download_dir: Path) -> Path:
     local_onnx = download_dir / onnx_name
     if not local_onnx.exists():
         print(f"⤵  Downloading ONNX model for '{model_name}'")
-        hf_hub_download(
-            repo_id=model_name,
-            filename="model.onnx",
-            local_dir=str(download_dir),
-            local_dir_use_symlinks=False,
-        )
+        try:
+            # Note: This assumes the ONNX file is named "model.onnx" in the HF repo
+            downloaded_path = hf_hub_download(
+                repo_id=model_name,
+                filename="model.onnx",
+                local_dir=str(download_dir),
+                local_dir_use_symlinks=False,
+            )
+            # Rename to expected filename if needed
+            if Path(downloaded_path).name != onnx_name:
+                Path(downloaded_path).rename(local_onnx)
+        except Exception as e:
+            logger.error(f"Failed to download ONNX model from '{model_name}': {e}")
+            raise RuntimeError(f"Could not fetch model '{model_name}': {e}")
     return local_onnx
 
 
