@@ -53,7 +53,7 @@ THe following models are officially supported. However, in theory, any STT ONNX 
 - base.en
 - small.en
 
-#### Multi-lingual models
+#### Multilingual models
 - tiny
 - base
 - small
@@ -148,7 +148,7 @@ services:
    
 For AMD64 with dGPU:
 
-```
+```bash
 docker run --gpus all \
   --name wyoming-whisper-trt \
   --restart unless-stopped \
@@ -163,7 +163,7 @@ docker run --gpus all \
 
 For ARM64 with dGPU:
 
-```
+```bash
 docker run --gpus all \
   --name wyoming-whisper-trt \
   --restart unless-stopped \
@@ -178,7 +178,7 @@ docker run --gpus all \
 
 For ARM64 with iGPU:
 
-```
+```bash
 docker run --gpus all \
   --name wyoming-whisper-trt \
   --restart unless-stopped \
