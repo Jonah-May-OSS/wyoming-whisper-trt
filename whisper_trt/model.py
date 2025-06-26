@@ -672,7 +672,7 @@ MODEL_BUILDERS = {
 }
 
 
-def onnx_to_trt_engine(onnx_path: str, engine_path: str):
+def onnx_to_trt_engine(onnx_path: str, engine_path: str, max_workspace_size: int = 1 << 30, fp16_mode: bool = True, int8_mode: bool = False):
     """
     Parse an ONNX file and serialize out a TensorRT engine.
     """
@@ -687,9 +687,14 @@ def onnx_to_trt_engine(onnx_path: str, engine_path: str):
                 print(parser.get_error(i))
             raise RuntimeError("Failed to parse ONNX model")
     config = builder.create_builder_config()
-    config.max_workspace_size = 1 << 30
-    config.set_flag(trt.BuilderFlag.FP16)
+    config.max_workspace_size = max_workspace_size
+    if fp16_mode and not int8_mode:
+        config.set_flag(trt.BuilderFlag.FP16)
+    if int8_mode:
+        config.set_flag(trt.BuilderFlag.INT8)
     engine = builder.build_engine(network, config)
+    if engine is None:
+        raise RuntimeError("Failed to build TensorRT engine")
     with open(engine_path, "wb") as f:
         f.write(engine.serialize())
     return engine_path
