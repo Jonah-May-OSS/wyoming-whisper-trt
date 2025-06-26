@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+
 """
 Main entry point for the Whisper TRT server.
 
@@ -105,6 +106,7 @@ def extract_languages(model: WhisperTRT, model_name: str) -> List[str]:
     """
     if is_language_specific(model_name):
         # For example, "small.en" -> "en"
+
         language_code = model_name.split(".")[-1]
         languages = [language_code]
         logger.debug(
@@ -114,6 +116,7 @@ def extract_languages(model: WhisperTRT, model_name: str) -> List[str]:
         try:
             # If your WhisperTRT class has a get_supported_languages() method,
             # it would return a list of all valid language codes. If not, fallback to ["en"].
+
             languages = model.get_supported_languages()
             logger.debug(
                 f"Supported languages retrieved for model '{model_name}': {languages}"
@@ -199,26 +202,28 @@ async def run_server(uri: str, handler_factory_func, *args, **kwargs) -> None:
     finally:
         await server.close()
         logger.info("Server has been shut down.")
-        
+
 
 def fetch_model_source(model_name: str, download_dir: Path) -> Path:
     download_dir.mkdir(exist_ok=True, parents=True)
     # 1) If it’s one of the built-ins, keep your existing PTH filename:
+
     if model_name in MODEL_FILENAMES:
         return download_dir / MODEL_FILENAMES[model_name]
     # 2) Otherwise treat it as a HF repo ID → download ONNX
+
     onnx_name = f"{model_name.replace('/', '_')}.onnx"
     local_onnx = download_dir / onnx_name
     if not local_onnx.exists():
         print(f"⤵  Downloading ONNX model for '{model_name}'")
         hf_hub_download(
-          repo_id=model_name,
-          filename="model.onnx",
-          local_dir=str(download_dir),
-          local_dir_use_symlinks=False,
+            repo_id=model_name,
+            filename="model.onnx",
+            local_dir=str(download_dir),
+            local_dir_use_symlinks=False,
         )
     return local_onnx
-    
+
 
 async def main() -> None:
     """Main entry point."""
@@ -283,6 +288,7 @@ async def main() -> None:
     )
 
     # Restored/added argument for default language selection
+
     parser.add_argument(
         "--language",
         type=str,
@@ -293,22 +299,25 @@ async def main() -> None:
     args = parser.parse_args()
 
     # Setup logging
+
     setup_logging(args.debug, args.log_format)
 
     # Normalize model name
+
     model_name = normalize_model_name(args.model)
 
     # Determine if the model is language-specific
+
     model_is_lang_specific = is_language_specific(model_name)
     logger.debug(f"Model '{model_name}' is language-specific: {model_is_lang_specific}")
 
     # Set download directory to first data directory if not specified
+
     if not args.download_dir:
         args.download_dir = args.data_dir[0]
         logger.debug(
             f"No download directory specified. Using first data directory: {args.download_dir}"
         )
-
     download_path = Path(args.download_dir)
     try:
         download_path.mkdir(parents=True, exist_ok=True)
@@ -316,33 +325,33 @@ async def main() -> None:
     except OSError as e:
         logger.error(f"Failed to create download directory at '{download_path}': {e}")
         sys.exit(1)
-
     # Load Whisper TRT model
+
     try:
         source_path = fetch_model_source(model_name, download_path)
         # if it’s an ONNX file, pass build=True so load_trt_model will convert it:
+
         logger.info(f"Loading Whisper TRT model '{model_name}'...")
-        trt_model = load_trt_model(
-            model_name,
-            path=str(source_path),
-            build=True
-        )
+        trt_model = load_trt_model(model_name, path=str(source_path), build=True)
         logger.info(f"Whisper TRT model '{model_name}' loaded successfully.")
     except Exception as e:
         logger.error(f"Failed to load Whisper TRT model '{model_name}': {e}")
         sys.exit(1)
-
     # Extract supported languages
+
     languages = extract_languages(trt_model, model_name)
 
     # Build Wyoming Info
+
     wyoming_info = build_wyoming_info(model_name, languages)
 
     # Initialize asyncio lock for model access
+
     model_lock = asyncio.Lock()
     logger.debug("Initialized asyncio lock for model access.")
 
     # Create the event handler factory, passing the user-defined language
+
     handler_factory_func = partial(
         WhisperTrtEventHandler,
         wyoming_info=wyoming_info,
@@ -355,6 +364,7 @@ async def main() -> None:
     )
 
     # Run the server
+
     try:
         logger.info("Starting the Whisper TRT ASR server...")
         await run_server(args.uri, handler_factory_func)
