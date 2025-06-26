@@ -80,6 +80,7 @@ services:
       - DEVICE=cuda
       - DATA_DIR=/data
       - DOWNLOAD_DIR=/data/models
+      - COMPUTE_TYPE=int8
     volumes:
       - wyoming-data:/data
     restart: unless-stopped
@@ -106,6 +107,7 @@ services:
       - DEVICE=cuda
       - DATA_DIR=/data
       - DOWNLOAD_DIR=/data/models
+      - COMPUTE_TYPE=int8
     volumes:
       - wyoming-data:/data
     restart: unless-stopped
@@ -130,6 +132,7 @@ services:
       - DEVICE=cuda
       - DATA_DIR=/data
       - DOWNLOAD_DIR=/data/models
+      - COMPUTE_TYPE=int8
     volumes:
       - wyoming-data:/data
     restart: unless-stopped
@@ -157,6 +160,7 @@ docker run --gpus all \
   -e MODEL=base \
   -e LANGUAGE=auto \
   -e DEVICE=cuda \
+  -e COMPUTE_TYPE=int8 \
   -v /srv/wyoming-data:/data \
   captnspdr/wyoming-whisper-trt:latest-amd64
 ```
@@ -172,6 +176,7 @@ docker run --gpus all \
   -e MODEL=base \
   -e LANGUAGE=auto \
   -e DEVICE=cuda \
+  -e COMPUTE_TYPE=int8 \
   -v /srv/wyoming-data:/data \
   captnspdr/wyoming-whisper-trt:latest-arm64
 ```
@@ -187,6 +192,7 @@ docker run --gpus all \
   -e MODEL=base \
   -e LANGUAGE=auto \
   -e DEVICE=cuda \
+  -e COMPUTE_TYPE=int8 \
   -v /srv/wyoming-data:/data \
   captnspdr/wyoming-whisper-trt:latest-igpu
 ```
