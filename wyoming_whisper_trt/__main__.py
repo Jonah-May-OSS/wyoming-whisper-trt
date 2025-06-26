@@ -6,6 +6,9 @@ Main entry point for the Whisper TRT server.
 This script initializes the Whisper TRT model, sets up the server, and handles client events.
 """
 
+# SDPA fix for Whisper 20240930 and newer per https://github.com/openai/whisper/discussions/2423
+from whisper.model import disable_sdpa
+
 import argparse
 import asyncio
 import logging
@@ -350,4 +353,6 @@ def run() -> None:
 
 
 if __name__ == "__main__":
-    run()
+    # SDPA fix for Whisper 20240930 and newer per https://github.com/openai/whisper/discussions/2423
+    with disable_sdpa():
+        run()
