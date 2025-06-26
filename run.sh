@@ -34,4 +34,5 @@ exec python3 -m wyoming_whisper_trt.__main__ \
     --data-dir "${DATA_DIR:-/data}" \
     --download-dir "${DOWNLOAD_DIR:-/data}" \
     --device "${DEVICE:-cuda}" \
+    --compute-type "${COMPUTE_TYPE:-int8}" \
     ${DEBUG:+--debug}
