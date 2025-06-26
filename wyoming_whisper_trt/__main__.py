@@ -232,7 +232,7 @@ def fetch_model_source(model_name: str, download_dir: Path) -> Path:
                 Path(downloaded_path).rename(local_onnx)
         except Exception as e:
             logger.error(f"Failed to download ONNX model from '{model_name}': {e}")
-            raise RuntimeError(f"Could not fetch model '{model_name}': {e}")
+            raise RuntimeError(f"Could not fetch model '{model_name}': {e}") from e
     return local_onnx
 
 
