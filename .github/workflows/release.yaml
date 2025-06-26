@@ -42,22 +42,25 @@ jobs:
           versionSpec: '0.20.x'
 
       - name: Create release with GitReleaseManager
-        uses: gittools/actions/gitreleasemanager/create@81f0bc44e27a689ce858668d7a2081ac2387b605
+        uses: gittools/actions/gitreleasemanager/create@v0.20.x
         with:
-          token: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
-          milestone: ${{ steps.gitversion.outputs.MajorMinorPatch }}
-          name: ${{ steps.gitversion.outputs.MajorMinorPatch }}
+          token:      ${{ secrets.PERSONAL_GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          milestone:  ${{ steps.gitversion.outputs.MajorMinorPatch }}
+          name:       ${{ steps.gitversion.outputs.MajorMinorPatch }}
           assets: |
             release.zip
 
       - name: Publish release with GitReleaseManager
-        uses: gittools/actions/gitreleasemanager/publish@81f0bc44e27a689ce858668d7a2081ac2387b605
+        uses: gittools/actions/gitreleasemanager/publish@v0.20.x
         with:
-          token: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
-          milestone: ${{ steps.gitversion.outputs.MajorMinorPatch }}
+          token:      ${{ secrets.PERSONAL_GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          milestone:  ${{ steps.gitversion.outputs.MajorMinorPatch }}
 
       - name: Close release with GitReleaseManager
-        uses: gittools/actions/gitreleasemanager/close@81f0bc44e27a689ce858668d7a2081ac2387b605
+        uses: gittools/actions/gitreleasemanager/close@v0.20.x
         with:
-          token: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
-          milestone: ${{ steps.gitversion.outputs.MajorMinorPatch }}
+          token:      ${{ secrets.PERSONAL_GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          milestone:  ${{ steps.gitversion.outputs.MajorMinorPatch }}
