@@ -13,10 +13,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@09d2acae674a48949e3602304ab46fd20ae0c42f
-
-      - name: Fetch all history for all tags and branches
-        run: git fetch --prune --unshallow
-
+        with:
+          fetch-depth: 0
+          tags: true
+          
       - name: Zip Release
         run: zip -x '*.git*' -r release.zip .
 
@@ -35,6 +35,12 @@ jobs:
       - name: Use GitVersion
         uses: gittools/actions/gitversion/execute@81f0bc44e27a689ce858668d7a2081ac2387b605
         id: gitversion
+        with:
+          useConfigFile: true
+          configFilePath: GitVersion.yml
+          arguments: >
+            -output json
+            -verbosity quiet
 
       - name: Install GitReleaseManager
         uses: gittools/actions/gitreleasemanager/setup@81f0bc44e27a689ce858668d7a2081ac2387b605
