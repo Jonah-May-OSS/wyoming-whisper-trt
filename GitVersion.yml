@@ -1,3 +1,28 @@
+# This configuration uses GitFlow branching model which always has a main and a develop branch. see: https://nvie.com/posts/a-successful-git-branching-model/
+# This configuration follows Semantic Versioning. see: https://semver.org/
+# A good explanation on semantic versioning: https://semantic-versioning.org/
+workflow: GitFlow/v1
+assembly-versioning-scheme: MajorMinorPatchTag
+assembly-file-versioning-scheme: MajorMinorPatchTag
+assembly-informational-format: "{FullSemVer}"
+tag-prefix: "[vV]?"
+version-in-branch-pattern: (?<version>[vV]?\d+(\.\d+)?(\.\d+)?).*
+major-version-bump-message: '\+semver:\s?(breaking|major)'
+minor-version-bump-message: '\+semver:\s?(feature|minor)'
+patch-version-bump-message: '\+semver:\s?(fix|patch)'
+no-bump-message: '\+semver:\s?(none|skip)'
+tag-pre-release-weight: 60000
+commit-date-format: "yyyy-MM-dd"
+merge-message-formats: {}
+update-build-number: true
+semantic-version-format: Strict #ensure that versions are consistently formatted and that the versioning process remains predictable and reliable. This can be particularly important for projects with strict dependency management and release policies.
+strategies:
+  - Fallback #This strategy is used when no other versioning strategy applies. It ensures that a version is always generated, even if no tags or commits indicate a version change.
+  #ConfiguredNextVersion: #This strategy allows you to manually specify the next version number. It's useful for scenarios where you want to control the versioning process directly.
+  - MergeMessage #This strategy increments the version based on the merge commit message. If the message contains specific keywords (e.g., "version bump"), the version number is incremented accordingly.
+  #- TaggedCommit #This strategy uses the commit tagged with a version number to determine the next version. It's useful for projects that follow a strict versioning policy based on tags.
+  - TrackReleaseBranches #This strategy tracks branches that are used for releases. It ensures that the version number is incremented based on the commits made to these branches.
+  - VersionInBranchName #This strategy extracts the version number from the branch name itself. It's useful for projects that use branch names to indicate version information.
 branches:
   release:
     regex: "(release\\/|\\\\)(?<BranchName>.+)"
