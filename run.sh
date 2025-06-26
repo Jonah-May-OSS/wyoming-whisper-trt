@@ -1,7 +1,22 @@
 #!/bin/bash
+set -euo pipefail
 
 # Navigate to the application directory
 cd /usr/src/wyoming-whisper-trt
+
+# Determine which model to use:
+# 1) If a CLI arg was given, use that
+# 2) Else if $MODEL is set, use that
+# 3) Otherwise default to "base"
+if [ $# -ge 1 ]; then
+  MODEL="$1"
+elif [ -n "${MODEL:-}" ]; then
+  MODEL="$MODEL"
+else
+  MODEL="base"
+fi
+
+echo "▶️  Using Whisper model: $MODEL"
 
 # Check if the virtual environment is present; if not, run setup
 if [ ! -d ".venv" ]; then
@@ -24,11 +39,11 @@ else
 fi
 
 # Launch the main application
-python3 -m wyoming_whisper_trt \
-    --model base \
-    --language auto \
-    --uri 'tcp://0.0.0.0:10300' \
-    --data-dir /data \
-    --download-dir /data \
-    --device cuda \
-    --debug
+exec python3 -m wyoming_whisper_trt.__main__ \
+    --model "$MODEL" \
+    --language "${LANGUAGE:-auto}" \
+    --uri "${URI:-tcp://0.0.0.0:10300}" \
+    --data-dir "${DATA_DIR:-/data}" \
+    --download-dir "${DOWNLOAD_DIR:-/data}" \
+    --device "${DEVICE:-cuda}" \
+    ${DEBUG:+--debug}
