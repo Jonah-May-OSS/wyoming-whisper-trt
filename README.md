@@ -47,7 +47,7 @@ NOTE: ARM64 dGPU and iGPU containers may take a while to start on first launch a
 2. Install and configure the [Nvidia Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
 
 ### Model options
-The following models are officially supported. However, in theory, any STT ONNX Whisper model on HuggingFace should work. For example, `RedHatAI/whisper-large-v3-FP8-Dynamic`.
+The following models are officially supported.
 #### English-only models
 - tiny.en
 - base.en
