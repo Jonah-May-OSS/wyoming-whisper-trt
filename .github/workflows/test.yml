@@ -15,6 +15,7 @@ on:
       - '**/*.md'
       - 'renovate.json'
       - 'GitReleaseManager.yaml'
+      - 'GitVersion.yml'
 
 jobs:
   test_linux:
