@@ -13,6 +13,8 @@ on:
       - 'examples/**'
       - 'tests/**'
       - '**/*.md'
+      - 'renovate.json'
+      - 'GitReleaseManager.yaml'
 
 jobs:
   test_linux:
