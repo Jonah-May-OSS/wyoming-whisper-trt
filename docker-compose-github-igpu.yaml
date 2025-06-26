@@ -11,11 +11,10 @@ services:
       - DEVICE=cuda
       - DATA_DIR=/data
       - DOWNLOAD_DIR=/data/models
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     volumes:
       - wyoming-data:/data
     restart: unless-stopped
     network_mode: host
     runtime: nvidia
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
