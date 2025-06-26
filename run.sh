@@ -4,7 +4,7 @@ set -euo pipefail
 # Navigate to the application directory
 cd /usr/src/wyoming-whisper-trt
 
-echo "▶️  Using Whisper model: $MODEL"
+echo "▶️  Using Whisper model: ${MODEL:-base}"
 
 # Check if the virtual environment is present; if not, run setup
 if [ ! -d ".venv" ]; then
