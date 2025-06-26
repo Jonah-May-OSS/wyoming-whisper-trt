@@ -711,7 +711,7 @@ def load_trt_model(
 
     Supports:
      - Built-in variants via MODEL_BUILDERS (producing .pth via Torch2TRT).
-     - Arbitrary ONNX files (converting ONNX→.trt engine once).
+     - Arbitrary ONNX files (converting ONNX→.trt engines once).
      - Generic HF fallback via WhisperTRTBuilder if you like.
     """
     cache_dir = get_cache_dir()
@@ -719,38 +719,48 @@ def load_trt_model(
 
     safe_name = name.replace("/", "_")
 
-    # If no path given, default to built-in PTH
-
+    # default to built-in .pth
     if path is None:
         path = os.path.join(cache_dir, MODEL_FILENAMES.get(name, f"{safe_name}.pth"))
-    # 1) ONNX path → convert to TRT first
 
+    # 1) ONNX path → convert into *two* TRT engines
     if path.endswith(".onnx"):
         if not build:
             raise RuntimeError("ONNX conversion skipped (build=False)")
-        engine_path = os.path.join(cache_dir, f"{safe_name}.trt")
-        if not os.path.exists(engine_path):
-            print(f"⤵ Converting ONNX → TRT engine for '{name}'")
-            onnx_to_trt_engine(path, engine_path)
-        # now wrap raw TRT engine into your WhisperTRT class
 
-        return WhisperTRTBuilder.load_from_trt(engine_path, name=name, verbose=verbose)
-    # 2) Known built-in variant path (Torch2TRT .pth)
+        encoder_onnx = f"{safe_name}_encoder.onnx"
+        decoder_onnx = f"{safe_name}_decoder.onnx"
+        # (You will need to export those subgraphs to ONNX yourself,
+        # e.g. via torch.onnx.export on encoder and decoder modules.)
 
+        enc_trt = os.path.join(cache_dir, f"{safe_name}_encoder.trt")
+        dec_trt = os.path.join(cache_dir, f"{safe_name}_decoder.trt")
+
+        if not os.path.exists(enc_trt):
+            print(f"⤵ Converting encoder ONNX → TRT for '{name}'")
+            onnx_to_trt_engine(encoder_onnx, enc_trt)
+        if not os.path.exists(dec_trt):
+            print(f"⤵ Converting decoder ONNX → TRT for '{name}'")
+            onnx_to_trt_engine(decoder_onnx, dec_trt)
+
+        # now wrap both engines into your WhisperTRT class
+        return WhisperTRTBuilder.load_from_trt(
+            enc_trt, dec_trt, name=name, verbose=verbose
+        )
+
+    # 2) Torch2TRT .pth path → use existing builder
     if name in MODEL_BUILDERS:
         builder_cls = MODEL_BUILDERS[name]
     else:
-        # 3) Generic HF fallback: use the generic builder
-
         builder_cls = WhisperTRTBuilder
         builder_cls.model = name
-    # Build the .pth if missing
 
+    # 3) Build .pth if missing
     if not os.path.exists(path):
         if not build:
             raise RuntimeError(f"No model found at {path}. Call with build=True.")
         print(f"⚙️  Building TRT-optimized .pth for '{name}' → {path}")
         builder_cls.build(path, verbose=verbose)
-    # Load either a .pth (Torch2TRT) or a .trt via custom loader
 
+    # 4) Load from the .pth (this will construct separate encoder/decoder engines under the hood)
     return builder_cls.load(path)
