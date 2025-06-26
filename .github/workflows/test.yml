@@ -147,7 +147,7 @@ jobs:
       - name: Inspect logs, enqueue retry & reboot runner
         if: failure()
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ PERSONAL_GITHUB_TOKEN }}
         run: |
           echo "🔍 Checking for Error 803 in server.log…"
           if grep -q 'Error 803: system has unsupported display driver / cuda driver combination' server.log; then
