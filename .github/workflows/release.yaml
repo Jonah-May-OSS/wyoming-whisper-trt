@@ -30,7 +30,7 @@ jobs:
       - name: Install GitVersion
         uses: gittools/actions/gitversion/setup@81f0bc44e27a689ce858668d7a2081ac2387b605
         with:
-          versionSpec: '5.x'
+          versionSpec: '6.x'
 
       - name: Use GitVersion
         uses: gittools/actions/gitversion/execute@81f0bc44e27a689ce858668d7a2081ac2387b605
