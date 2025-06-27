@@ -260,12 +260,7 @@ class WhisperTRT(nn.Module):
                     interim_tokens = out_tokens[
                         :, 2:cur_len
                     ]  # skip <sot> and <notimestamps>
-                    interim_text = self.tokenizer.decode(
-                        list(interim_tokens.flatten().cpu().numpy())
-                    )
-                    interim_text = re.sub(
-                        r"<\|transcribe\|><\|notimestamps\|>", "", interim_text
-                    ).strip()
+                    interim_text = self._decode_tokens(interim_tokens)
                     chunks.append(interim_text)
 
                 if next_token.item() == self.tokenizer.eot:
@@ -273,12 +268,7 @@ class WhisperTRT(nn.Module):
 
             # after loop, build final text
             final_tokens = out_tokens[:, 2 : cur_len - 1]
-            final_text = self.tokenizer.decode(
-                list(final_tokens.flatten().cpu().numpy())
-            )
-            final_text = re.sub(
-                r"<\|transcribe\|><\|notimestamps\|>", "", final_text
-            ).strip()
+            final_text = self._decode_tokens(final_tokens)
             decode_time = time.perf_counter() - decode_start
 
         self.stream.synchronize()
@@ -293,7 +283,6 @@ class WhisperTRT(nn.Module):
             )
 
         if stream:
-            logger.debug("⏳ Interim chunk[%d]=%r", i, interim_text)
             return {"chunks": chunks, "text": final_text}
         else:
             return {"text": final_text}
@@ -376,6 +365,11 @@ class WhisperTRT(nn.Module):
         if self.tokenizer is not None and hasattr(self.tokenizer, "all_language_codes"):
             return list(self.tokenizer.all_language_codes)
         return ["en"]
+
+    def _decode_tokens(self, tokens: torch.Tensor) -> str:
+        """Decode tokens to text, removing special markers."""
+        text = self.tokenizer.decode(list(tokens.flatten().cpu().numpy()))
+        return re.sub(r"<\|transcribe\|><\|notimestamps\|>", "", text).strip()
 
 
 # -----------------------------------------------------------------------------

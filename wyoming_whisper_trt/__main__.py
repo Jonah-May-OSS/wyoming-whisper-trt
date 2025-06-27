@@ -188,7 +188,7 @@ async def run_server(uri: str, handler_factory_func, *args, **kwargs) -> None:
         *args: Variable length argument list.
         **kwargs: Arbitrary keyword arguments.
     """
-    # create the wyoming server (e.g. AsyncTcpServer)
+    # Create the wyoming server (e.g. AsyncTcpServer)
     server = AsyncServer.from_uri(uri)
     logger.info(f"Server initialized and listening on {uri}.")
 
@@ -198,16 +198,9 @@ async def run_server(uri: str, handler_factory_func, *args, **kwargs) -> None:
         logger.error(f"Server encountered an error: {e}")
         raise
     finally:
-        # tear down the underlying asyncio.Server
-        # AsyncTcpServer keeps its real listener in `.server` or `._server`
-        sock_svc = getattr(server, "server", None) or getattr(server, "_server", None)
-        if sock_svc:
-            sock_svc.close()
-            # wait for the socket to actually close
-            await sock_svc.wait_closed()
-            logger.info("Underlying listener closed.")
-        else:
-            logger.debug("No underlying server object to close.")
+        # Use the stop method to handle event handler shutdown and server closure
+        await server.stop()
+        logger.info("Server and event handlers stopped gracefully.")
 
 
 async def main() -> None:

@@ -189,6 +189,14 @@ class WhisperTrtEventHandler(AsyncEventHandler):
         window = self._partial_threshold  # e.g. 0.25 s of audio
         hop = window // 2  # 50% overlap
 
+        # Prevent unbounded buffer growth for very long streams
+        max_buffer_size = self._partial_threshold * 10  # 2.5 seconds max
+        if len(self._pcm_buffer) > max_buffer_size:
+            # Keep only the most recent data
+            excess = len(self._pcm_buffer) - max_buffer_size
+            del self._pcm_buffer[:excess]
+            logger.debug(f"Trimmed PCM buffer by {excess} bytes")
+
         # only run while we have a full window’s worth
         while len(self._pcm_buffer) >= window:
             # raw → numpy
@@ -202,10 +210,13 @@ class WhisperTrtEventHandler(AsyncEventHandler):
 
             # streaming transcribe
             loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,
-                lambda pcm=pcm: self.model.transcribe(pcm, self._language, stream=True),
-            )
+            async with self.model_lock:
+                result = await loop.run_in_executor(
+                    None,
+                    lambda pcm=pcm: self.model.transcribe(
+                        pcm, self._language, stream=True
+                    ),
+                )
 
             # emit new chunks only
             chunks = result.get("chunks", [])
@@ -251,9 +262,9 @@ class WhisperTrtEventHandler(AsyncEventHandler):
                     logger.debug("➡️  Emitting final Transcript: %r", final_text)
                     await self.write_event(Transcript(text=final_text).event())
                 except Exception as e:
-                    logger.error("Final transcription failed: %s", e)
+                    logger.error("Final transcription failed: %s", e, exc_info=True)
                     await self.write_event(
-                        Transcript(text="Transcription failed.").event()
+                        Transcript(text=f"Transcription failed: {str(e)[:100]}").event()
                     )
 
         # 3) Emit the Wyoming “end of stream” event
