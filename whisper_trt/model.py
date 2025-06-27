@@ -279,10 +279,10 @@ class WhisperTRT(nn.Module):
                 total_time * 1000,
             )
 
+        result = {"text": final_text}
         if stream:
-            return {"chunks": chunks, "text": final_text}
-        else:
-            return {"text": final_text}
+            result["chunks"] = chunks
+        return result
 
     @torch.no_grad()
     def transcribe_batch(
