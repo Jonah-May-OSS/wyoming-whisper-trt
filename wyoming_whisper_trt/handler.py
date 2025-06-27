@@ -6,11 +6,9 @@ import io
 import logging
 import time
 import wave
-from pathlib import Path
 from typing import Optional
 
 import numpy as np
-import torch
 from wyoming.asr import (
     Transcribe,
     Transcript,
@@ -93,10 +91,6 @@ class WhisperTrtEventHandler(AsyncEventHandler):
         default_language: str = "auto",
         **kwargs,
     ) -> None:
-
-        # track what we’ve already emitted
-        self._last_full_text = ""
-
         # how many raw bytes before we do the next interim decode
         # 0.25 s of 16 kHz, 16-bit stereo -> 0.25 * 16k * 2 * 2 = 16 000 bytes
         self._partial_threshold = 16000
@@ -274,7 +268,6 @@ class WhisperTrtEventHandler(AsyncEventHandler):
         await self.write_event(TranscriptStop().event())
 
         # 4) Reset everything for the next utterance
-        self._last_full_text = ""
         self._pcm_buffer.clear()
         self._sent_start = False
         self._last_sent_chunk = 0

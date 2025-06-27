@@ -19,10 +19,7 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
-
-import argparse
 import os
-import psutil
 import re
 import time
 from typing import Optional, Dict, Any, List
@@ -35,8 +32,8 @@ import torch2trt
 import tensorrt
 
 from whisper import load_model
-from whisper.model import LayerNorm, Linear, Tensor, ModelDimensions, sinusoids, Whisper
-from whisper.tokenizer import Tokenizer, LANGUAGES, TO_LANGUAGE_CODE
+from whisper.model import LayerNorm, Tensor, ModelDimensions
+from whisper.tokenizer import Tokenizer, TO_LANGUAGE_CODE
 import whisper.audio
 from dataclasses import asdict
 
