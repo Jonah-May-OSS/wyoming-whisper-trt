@@ -16,6 +16,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Extract version from branch name
+        run: |
+          VERSION=${GITHUB_REF#refs/heads/release/}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
       - name: Zip Release
         run: zip -x '*.git*' -r release.zip .
 
@@ -37,8 +42,9 @@ jobs:
           token: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
           owner: ${{ steps.repo.outputs._0 }}
           repository: ${{ steps.repo.outputs._1 }}
-          milestone: ${{ github.ref_name }}
-          name:      ${{ github.ref_name }}
+          tag:       ${{ env.VERSION }}
+          milestone: ${{ env.VERSION }}
+          name:      ${{ env.VERSION }}
           assets: |
             release.zip
 
@@ -48,7 +54,7 @@ jobs:
           token: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
           owner: ${{ steps.repo.outputs._0 }}
           repository: ${{ steps.repo.outputs._1 }}
-          milestone: ${{ github.ref_name }}
+          milestone: ${{ env.VERSION }}
 
       - name: Close release with GitReleaseManager
         uses: gittools/actions/gitreleasemanager/close@3e0ee0a17f2325d46f3feb4d20dc9a01bd7d617e
