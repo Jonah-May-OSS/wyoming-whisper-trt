@@ -158,9 +158,10 @@ class WhisperTrtEventHandler(AsyncEventHandler):
             return True
 
     async def _handle_audio_chunk(self, event: Event) -> None:
+        """Process incoming audio chunks and stream back transcription."""
         chunk = AudioChunk.from_event(event)
 
-        # 1) init WAV writer if needed
+        # Initialize WAV writer if necessary
         if self._wave_writer is None:
             self._wav_buffer = io.BytesIO()
             self._wave_writer = wave.open(self._wav_buffer, "wb")
@@ -170,45 +171,42 @@ class WhisperTrtEventHandler(AsyncEventHandler):
             self._sample_width = chunk.width
             self._channels = chunk.channels
             logger.debug(
-                f"Initialized WAV buffer, sliding-window={self._partial_threshold} bytes"
+                f"Initialized WAV buffer with {self._partial_threshold} bytes threshold"
             )
 
-        # 2) write out for final dump
+        # Write to WAV buffer and accumulate PCM
         self._wave_writer.writeframes(chunk.audio)
-
-        # 3) accumulate raw PCM
         self._pcm_buffer.extend(chunk.audio)
 
-        # 4) first time only
+        # Emit TranscriptStart if this is the first chunk
         if not self._sent_start:
             await self.write_event(TranscriptStart(language=self._language).event())
             logger.debug("➡️  Emitted TranscriptStart")
             self._sent_start = True
 
-        # 5) sliding‐window decode whenever we have enough bytes
-        window = self._partial_threshold  # e.g. 0.25 s of audio
+        # Sliding window decode
+        window = self._partial_threshold
         hop = window // 2  # 50% overlap
 
-        # Prevent unbounded buffer growth for very long streams
-        max_buffer_size = self._partial_threshold * 10  # 2.5 seconds max
+        # Limit the size of the PCM buffer to avoid excessive memory use
+        max_buffer_size = self._partial_threshold * 10  # Example max buffer size
         if len(self._pcm_buffer) > max_buffer_size:
-            # Keep only the most recent data
             excess = len(self._pcm_buffer) - max_buffer_size
             del self._pcm_buffer[:excess]
             logger.debug(f"Trimmed PCM buffer by {excess} bytes")
 
-        # only run while we have a full window’s worth
+        # Process audio chunks with sliding window
         while len(self._pcm_buffer) >= window:
-            # raw → numpy
             dtype = {1: np.uint8, 2: np.int16, 4: np.int32}[self._sample_width]
             pcm = np.frombuffer(self._pcm_buffer[:window], dtype=dtype)
             if self._channels > 1:
                 pcm = pcm.reshape(-1, self._channels)
-            # normalize to float32
+
+            # Normalize to float32
             if pcm.dtype != np.float32:
                 pcm = pcm.astype(np.float32) / float(2 ** (8 * self._sample_width - 1))
 
-            # streaming transcribe
+            # Transcribe the chunk in a thread-safe manner
             loop = asyncio.get_event_loop()
             async with self.model_lock:
                 result = await loop.run_in_executor(
@@ -218,14 +216,14 @@ class WhisperTrtEventHandler(AsyncEventHandler):
                     ),
                 )
 
-            # emit new chunks only
+            # Emit each chunk's transcription result immediately
             chunks = result.get("chunks", [])
             for text in chunks[self._last_sent_chunk :]:
                 await self.write_event(TranscriptChunk(text=text).event())
                 logger.debug(f"➡️ Emitted TranscriptChunk: {text!r}")
             self._last_sent_chunk = len(chunks)
 
-            # drop just the hop amount so we keep overlap
+            # Drop just the hop amount to maintain overlap
             del self._pcm_buffer[:hop]
 
     async def _handle_audio_stop(self) -> None:
