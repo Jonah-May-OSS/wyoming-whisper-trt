@@ -189,11 +189,15 @@ class WhisperTrtEventHandler(AsyncEventHandler):
         hop = window // 2  # 50% overlap
 
         # Limit the size of the PCM buffer to avoid excessive memory use
-        max_buffer_size = self._partial_threshold * 10  # Example max buffer size
+        # Only trim if we have more than a reasonable amount of processed data
+        max_buffer_size = self._partial_threshold * 10
         if len(self._pcm_buffer) > max_buffer_size:
-            excess = len(self._pcm_buffer) - max_buffer_size
-            del self._pcm_buffer[:excess]
-            logger.debug(f"Trimmed PCM buffer by {excess} bytes")
+            # Keep at least 2 windows worth of data to maintain overlap
+            keep_size = window * 2
+            if len(self._pcm_buffer) > keep_size:
+                trim_to = len(self._pcm_buffer) - keep_size
+                del self._pcm_buffer[:trim_to]
+                logger.debug(f"Trimmed PCM buffer, keeping {keep_size} bytes")
 
         # Process audio chunks with sliding window
         while len(self._pcm_buffer) >= window:
