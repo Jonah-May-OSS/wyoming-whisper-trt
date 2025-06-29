@@ -62,6 +62,12 @@ jobs:
         with:
           use-github-cache: false
 
+      - name: Add CUDA 12.9 bin to PATH
+        run: echo "/usr/local/cuda-12.9/bin" >> $GITHUB_PATH
+
+      - name: Add CUDA 12.9 lib to LD_LIBRARY_PATH
+        run: echo "LD_LIBRARY_PATH=/usr/local/cuda-12.9/lib64:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+
       # 6. Create and activate virtual environment
       - name: Setup Virtual Environment
         shell: bash
