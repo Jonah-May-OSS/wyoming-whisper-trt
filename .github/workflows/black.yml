@@ -9,7 +9,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@09d2acae674a48949e3602304ab46fd20ae0c42f
+      - uses: actions/checkout@8edcb1bdb4e267140fa742c62e395cd74f332709
       - uses: psf/black@1fb95422c8719055ba5766f5bde7caf5d2e3bf21
         with:
           options: "--check --verbose"
