@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@ff7abcd0c3c05ccf6adc123a8cd1fd4fb30fb493
-      - uses: psf/black@dd937dcc7e6fd260c87868ed044a29042056cb00
+      - uses: psf/black@1f779dec013db37475fa56a5c9939a09eab7e7d6
         with:
           options: "--check --verbose"
           version: "~= 24.0"
