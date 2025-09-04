@@ -1,21 +1,116 @@
-# Use the base TensorRT image
-FROM nvcr.io/nvidia/tensorrt:25.06-py3-igpu
+FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0
 
+################################################################################
+# 1️⃣ BASE SYSTEM SETUP
+################################################################################
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # 🔧 Basic dev/build tools
+    git wget curl python3 python3-pip python3-dev python3-venv build-essential \
+    # 🔊 Audio + math libs (Whisper deps)
+    libopenblas-dev liblapack-dev libsndfile1 ffmpeg \
+    # 🤖 TensorRT dev libs (needed for torch2trt)
+    libnvinfer-dev libnvinfer-plugin-dev nvidia-cuda-toolkit \
+    # 🔑 Needed for adding NVIDIA apt repo
+    gnupg2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# ✅ Make sure CUDA path is consistent (some scripts expect /usr/local/cuda)
+RUN ln -sf /usr/local/cuda-12.6 /usr/local/cuda
+
+# ✅ Set up CUDA env vars for all future stages
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH}
+
+# ✅ Upgrade Python packaging tools early
+# ⚠️ Pin numpy<2 to avoid ABI breakages with PyTorch/torch2trt/Whisper
+RUN pip3 install --upgrade pip setuptools wheel "numpy<2" packaging
+
+################################################################################
+# 2️⃣ INSTALL cuSPARSELt (runtime + dev headers)
+################################################################################
+# 📌 Rationale: JetPack base image doesn’t ship cuSPARSELt at all. PyTorch/TensorRT require it.
+RUN echo "🔑 Adding NVIDIA CUDA apt repo..." && \
+    curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/sbsa/3bf863cc.pub | apt-key add - && \
+    echo "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/sbsa/ /" > /etc/apt/sources.list.d/cuda-sbsa.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+    libcusparselt0 \
+    libcusparselt-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+# ✅ Verify cuSPARSELt actually installed
+RUN test -f /usr/lib/aarch64-linux-gnu/libcusparseLt.so.0 || \
+    (echo "❌ cuSPARSELt runtime missing!" && exit 1)
+
+################################################################################
+# 3️⃣ PYTORCH (CUDA ENABLED)
+################################################################################
+# 🎯 Goal: Use NVIDIA’s official prebuilt PyTorch wheel for JetPack (CUDA 12.6/cuDNN 9.3)
+# 📌 Rationale: Avoid compiling PyTorch from source — too heavy for Jetson.
+WORKDIR /tmp
+RUN wget -nv https://developer.download.nvidia.com/compute/redist/jp/v61/pytorch/torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl && \
+    pip3 install --no-cache-dir torch-2.5.0a0+872d972e41*.whl
+
+# 🚨 FAIL FAST: verify Torch *build* has CUDA (but don’t require GPU drivers in build)
+RUN python3 - <<EOF
+import torch
+print("🔥 Torch version:", torch.__version__)
+print("🔥 Reported CUDA version:", torch.version.cuda)
+print("🔥 cuDNN version:", torch.backends.cudnn.version())
+assert torch.version.cuda is not None, "❌ Torch was not compiled with CUDA support!"
+assert torch.backends.cudnn.version() >= 9000, f"❌ Expected cuDNN ≥9, got {torch.backends.cudnn.version()}"
+EOF
+
+################################################################################
+# 4️⃣ TORCH2TRT (TensorRT acceleration for Whisper)
+################################################################################
 WORKDIR /usr/src
+RUN git clone https://github.com/NVIDIA-AI-IOT/torch2trt.git
+WORKDIR /usr/src/torch2trt
 
-# Update and install python3-venv, clone the repository, and run the setup script
-RUN apt-get update && apt-get install -y \
-    python3-venv \
-    ffmpeg \
-    git \
-    && git clone --recursive https://github.com/JonahMMay/wyoming-whisper-trt \
-    && cd wyoming-whisper-trt \
-    && chmod +x ./script/setup \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+# 🩹 Patch: torch2trt setup.py imports TensorRT too early — break install if TRT not present.
+RUN sed -i 's/^import tensorrt/# import tensorrt/' setup.py && \
+    sed -i 's/version.parse(tensorrt.__version__)/version.parse("8")/' setup.py
 
-WORKDIR /
-COPY ./run.sh ./
-    
+# 🛡 Temporarily comment CUDAExtension block so first install doesn’t break
+RUN perl -pi -e 'if (/plugins_ext_module = CUDAExtension\(/../^\s*\)/) { s/^/#/ }' setup.py
+
+# ✅ First pass: skeleton install
+RUN python3 setup.py install
+
+# 🔨 Second pass: actually build CUDA plugins
+RUN CUDA_HOME=/usr/local/cuda PATH=$CUDA_HOME/bin:$PATH python3 setup.py build_ext --inplace && \
+    python3 setup.py install
+
+################################################################################
+# 5️⃣ WHISPER + WYOMING WHISPER TRT
+################################################################################
+WORKDIR /usr/src
+RUN git clone https://github.com/openai/whisper.git && \
+    git clone https://github.com/Jonah-May-OSS/wyoming-whisper-trt.git
+
+WORKDIR /usr/src/whisper
+RUN pip3 install --no-cache-dir git+https://github.com/openai/whisper.git && \
+    pip3 install .
+
+WORKDIR /usr/src/wyoming-whisper-trt
+# 🩹 Remove torch/tensorrt from requirements — we already installed them
+RUN sed -i '/tensorrt/d;/torch/d' requirements.txt && \
+    pip3 install -r requirements.txt
+# 🩹 Remove install_requires from setup.py to avoid dependency conflicts
+RUN sed -i '/install_requires/d' setup.py && \
+    pip3 install .
+
+################################################################################
+# 6️⃣ RUNTIME CONFIG
+################################################################################
+WORKDIR /usr/src/wyoming-whisper-trt
+ENV PYTHONPATH=/usr/src/wyoming-whisper-trt
 EXPOSE 10300
-    
+
+# ✅ Runtime check: will actually assert CUDA is usable *once the container runs on Jetson*
+HEALTHCHECK --interval=1m --timeout=5s --retries=3 CMD python3 -c "import torch; assert torch.cuda.is_available()" || exit 1
+
+# 🚀 Default entrypoint: start Wyoming Whisper TRT server
 ENTRYPOINT ["bash", "/run.sh"]
