@@ -2,7 +2,7 @@
 wyoming==1.7.2
 openai-whisper==20250625
 psutil~=7.0.0
-tensorrt_cu12_libs~=10.13.2
+tensorrt_cu12_libs~=10.13.3
 tensorrt_cu12_bindings~=10.13.2 
 tensorrt~=10.13.2
 packaging~=25.0
