@@ -377,7 +377,7 @@ class WhisperTRTBuilder:
     verbose: bool = False
     _tokenizer: Optional[Tokenizer] = None
     _dims: Optional[ModelDimensions] = None
-    
+
     @classmethod
     def get_workspace_size(cls) -> int:
         """Get appropriate workspace size based on model size."""
@@ -408,7 +408,7 @@ class WhisperTRTBuilder:
         # Clear model instance early to free memory
         del model_inst
         torch.cuda.empty_cache()
-        
+
         x = torch.randn(1, 1, dims.n_text_state).cuda()
         xa = torch.randn(1, dims.n_audio_ctx, dims.n_audio_state).cuda()
         mask = torch.randn(dims.n_text_ctx, dims.n_text_ctx).cuda()
@@ -693,9 +693,15 @@ def load_trt_model(
             builder.build(path, verbose=verbose)
         except RuntimeError as e:
             # Handle potential memory issues during build
-            if "out of memory" in str(e).lower() or "segmentation fault" in str(e).lower():
-                logger.error("Failed to build model %s due to memory issues. "
-                           "This may happen with large models on systems with insufficient GPU memory.", name)
+            if (
+                "out of memory" in str(e).lower()
+                or "segmentation fault" in str(e).lower()
+            ):
+                logger.error(
+                    "Failed to build model %s due to memory issues. "
+                    "This may happen with large models on systems with insufficient GPU memory.",
+                    name,
+                )
                 # Try to free up memory
                 torch.cuda.empty_cache()
             raise RuntimeError(f"Failed to build model {name}: {e}") from e
@@ -706,7 +712,10 @@ def load_trt_model(
     except Exception as e:
         logger.error("Failed to load TRT model %s: %s", name, e)
         if "out of memory" in str(e).lower():
-            logger.error("GPU memory insufficient for model %s. Consider using a smaller model.", name)
+            logger.error(
+                "GPU memory insufficient for model %s. Consider using a smaller model.",
+                name,
+            )
         raise
 
     # 1) Warm up with one very short silent buffer to clear cache
