@@ -377,6 +377,16 @@ class WhisperTRTBuilder:
     verbose: bool = False
     _tokenizer: Optional[Tokenizer] = None
     _dims: Optional[ModelDimensions] = None
+    
+    @classmethod
+    def get_workspace_size(cls) -> int:
+        """Get appropriate workspace size based on model size."""
+        # Large models need more workspace memory to avoid segmentation faults
+        large_models = {"large", "large-v2", "large-v3", "large-v3-turbo"}
+        if cls.model in large_models:
+            # Use 4GB workspace for large models (was 1GB)
+            return 1 << 32  # 4GB
+        return cls.max_workspace_size  # 1GB for smaller models
 
     @classmethod
     @torch.no_grad()
@@ -384,6 +394,9 @@ class WhisperTRTBuilder:
         if cls._dims is None:
             model_inst = load_model(cls.model).cuda().eval()
             cls._dims = model_inst.dims
+            # Clean up the model instance to free memory for large models
+            del model_inst
+            torch.cuda.empty_cache()
         return cls._dims
 
     @classmethod
@@ -392,6 +405,10 @@ class WhisperTRTBuilder:
         dims = cls._load_model_once()
         model_inst = load_model(cls.model).cuda().eval()
         decoder_blocks_module = _TextDecoderEngine(model_inst.decoder.blocks)
+        # Clear model instance early to free memory
+        del model_inst
+        torch.cuda.empty_cache()
+        
         x = torch.randn(1, 1, dims.n_text_state).cuda()
         xa = torch.randn(1, dims.n_audio_ctx, dims.n_audio_state).cuda()
         mask = torch.randn(dims.n_text_ctx, dims.n_text_ctx).cuda()
@@ -416,7 +433,7 @@ class WhisperTRTBuilder:
             ],
             input_names=["x", "xa", "mask"],
             output_names=["output"],
-            max_workspace_size=cls.max_workspace_size,
+            max_workspace_size=cls.get_workspace_size(),
             fp16_mode=cls.fp16_mode,
             log_level=tensorrt.Logger.VERBOSE if cls.verbose else tensorrt.Logger.ERROR,
         )
@@ -436,6 +453,9 @@ class WhisperTRTBuilder:
         n_frames = dims.n_audio_ctx * 2
         x = torch.randn(1, dims.n_mels, n_frames).cuda()
         positional_embedding = model_inst.encoder.positional_embedding.cuda().detach()
+        # Clear model instance early to free memory
+        del model_inst
+        torch.cuda.empty_cache()
         engine = torch2trt.torch2trt(
             encoder_module,
             [x, positional_embedding],
@@ -451,7 +471,7 @@ class WhisperTRTBuilder:
             ],
             input_names=["x", "positional_embedding"],
             output_names=["output"],
-            max_workspace_size=cls.max_workspace_size,
+            max_workspace_size=cls.get_workspace_size(),
             fp16_mode=cls.fp16_mode,
             log_level=tensorrt.Logger.VERBOSE if cls.verbose else tensorrt.Logger.ERROR,
         )
@@ -669,10 +689,25 @@ def load_trt_model(
     if not os.path.exists(path):
         if not build:
             raise RuntimeError(f"No model found at {path}; pass build=True.")
-        builder.build(path, verbose=verbose)
+        try:
+            builder.build(path, verbose=verbose)
+        except RuntimeError as e:
+            # Handle potential memory issues during build
+            if "out of memory" in str(e).lower() or "segmentation fault" in str(e).lower():
+                logger.error("Failed to build model %s due to memory issues. "
+                           "This may happen with large models on systems with insufficient GPU memory.", name)
+                # Try to free up memory
+                torch.cuda.empty_cache()
+            raise RuntimeError(f"Failed to build model {name}: {e}") from e
     # load the TRT model (already .cuda().eval() inside)
 
-    trt_model = builder.load(path)
+    try:
+        trt_model = builder.load(path)
+    except Exception as e:
+        logger.error("Failed to load TRT model %s: %s", name, e)
+        if "out of memory" in str(e).lower():
+            logger.error("GPU memory insufficient for model %s. Consider using a smaller model.", name)
+        raise
 
     # 1) Warm up with one very short silent buffer to clear cache
 
