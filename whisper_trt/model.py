@@ -472,11 +472,13 @@ class WhisperTRTBuilder:
         """
         dims = cls._load_model_once()
         model_inst = load_model(cls.model).cuda().eval()
-        decoder_blocks_module = _TextDecoderEngine(model_inst.decoder.blocks)
-        # Clear model instance early to free memory
-        del model_inst
-        torch.cuda.synchronize()
-        torch.cuda.empty_cache()
+        try:
+            decoder_blocks_module = _TextDecoderEngine(model_inst.decoder.blocks)
+        finally:
+            # Clear model instance early to free memory
+            del model_inst
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
 
         dtype = torch.float16 if cls.fp16_mode else torch.float32
         x = torch.randn(1, 1, dims.n_text_state, device="cuda", dtype=dtype)
@@ -526,25 +528,27 @@ class WhisperTRTBuilder:
         """
         dims = cls._load_model_once()
         model_inst = load_model(cls.model).cuda().eval()
-        encoder_module = _AudioEncoderEngine(
-            model_inst.encoder.conv1,
-            model_inst.encoder.conv2,
-            model_inst.encoder.blocks,
-            model_inst.encoder.ln_post,
-        )
-        n_frames = dims.n_audio_ctx * 2
-        dtype = torch.float16 if cls.fp16_mode else torch.float32
-        x = torch.randn(1, dims.n_mels, n_frames, device="cuda", dtype=dtype)
-        positional_embedding = model_inst.encoder.positional_embedding.detach()
-        if cls.fp16_mode:
-            positional_embedding = positional_embedding.half()
-        positional_embedding = (
-            positional_embedding.pin_memory().cuda(non_blocking=True).contiguous()
-        )
-        # Clear model instance early to free memory
-        del model_inst
-        torch.cuda.synchronize()
-        torch.cuda.empty_cache()
+        try:
+            encoder_module = _AudioEncoderEngine(
+                model_inst.encoder.conv1,
+                model_inst.encoder.conv2,
+                model_inst.encoder.blocks,
+                model_inst.encoder.ln_post,
+            )
+            n_frames = dims.n_audio_ctx * 2
+            dtype = torch.float16 if cls.fp16_mode else torch.float32
+            x = torch.randn(1, dims.n_mels, n_frames, device="cuda", dtype=dtype)
+            positional_embedding = model_inst.encoder.positional_embedding.detach()
+            if cls.fp16_mode:
+                positional_embedding = positional_embedding.half()
+            positional_embedding = (
+                positional_embedding.pin_memory().cuda(non_blocking=True).contiguous()
+            )
+        finally:
+            # Clear model instance early to free memory
+            del model_inst
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
         engine = torch2trt.torch2trt(
             encoder_module,
             [x, positional_embedding],
@@ -570,21 +574,27 @@ class WhisperTRTBuilder:
     @torch.no_grad()
     def get_text_decoder_extra_state(cls) -> Dict[str, Any]:
         model_inst = load_model(cls.model, device="cpu").eval()  # CPU is enough
-        extra_state = {
-            "token_embedding": model_inst.decoder.token_embedding.state_dict(),
-            "positional_embedding": model_inst.decoder.positional_embedding,
-            "ln": model_inst.decoder.ln.state_dict(),
-            "mask": model_inst.decoder.mask,
-        }
-        del model_inst
+        try:
+            extra_state = {
+                "token_embedding": model_inst.decoder.token_embedding.state_dict(),
+                "positional_embedding": model_inst.decoder.positional_embedding,
+                "ln": model_inst.decoder.ln.state_dict(),
+                "mask": model_inst.decoder.mask,
+            }
+        finally:
+            del model_inst
         return extra_state
 
     @classmethod
     @torch.no_grad()
     def get_audio_encoder_extra_state(cls) -> Dict[str, Any]:
         model_inst = load_model(cls.model, device="cpu").eval()  # CPU is enough
-        extra_state = {"positional_embedding": model_inst.encoder.positional_embedding}
-        del model_inst
+        try:
+            extra_state = {
+                "positional_embedding": model_inst.encoder.positional_embedding
+            }
+        finally:
+            del model_inst
         return extra_state
 
     @classmethod
@@ -606,13 +616,15 @@ class WhisperTRTBuilder:
     def get_tokenizer(cls) -> Tokenizer:
         if cls._tokenizer is None:
             model_inst = load_model(cls.model, device="cpu")
-            cls._tokenizer = whisper.tokenizer.get_tokenizer(
-                model_inst.is_multilingual,
-                num_languages=model_inst.num_languages,
-                language=None,
-                task="transcribe",
-            )
-            del model_inst
+            try:
+                cls._tokenizer = whisper.tokenizer.get_tokenizer(
+                    model_inst.is_multilingual,
+                    num_languages=model_inst.num_languages,
+                    language=None,
+                    task="transcribe",
+                )
+            finally:
+                del model_inst
         return cls._tokenizer
 
     @classmethod
