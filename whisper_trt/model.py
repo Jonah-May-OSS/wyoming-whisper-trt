@@ -420,7 +420,9 @@ class WhisperTRTBuilder:
             ModelDimensions: The cached model dimensions.
         """
         if cls._dims is None:
-            model_inst = load_model(cls.model).eval()  # CPU is sufficient for dims
+            model_inst = load_model(
+                cls.model, device="cpu"
+            ).eval()  # CPU is sufficient for dims
             cls._dims = model_inst.dims
             del model_inst
         return cls._dims
@@ -526,7 +528,7 @@ class WhisperTRTBuilder:
     @classmethod
     @torch.no_grad()
     def get_text_decoder_extra_state(cls) -> Dict[str, Any]:
-        model_inst = load_model(cls.model).eval()  # CPU is enough
+        model_inst = load_model(cls.model, device="cpu").eval()  # CPU is enough
         extra_state = {
             "token_embedding": model_inst.decoder.token_embedding.state_dict(),
             "positional_embedding": model_inst.decoder.positional_embedding,
@@ -539,7 +541,7 @@ class WhisperTRTBuilder:
     @classmethod
     @torch.no_grad()
     def get_audio_encoder_extra_state(cls) -> Dict[str, Any]:
-        model_inst = load_model(cls.model).eval()  # CPU is enough
+        model_inst = load_model(cls.model, device="cpu").eval()  # CPU is enough
         extra_state = {"positional_embedding": model_inst.encoder.positional_embedding}
         del model_inst
         return extra_state
@@ -562,7 +564,7 @@ class WhisperTRTBuilder:
     @classmethod
     def get_tokenizer(cls) -> Tokenizer:
         if cls._tokenizer is None:
-            model_inst = load_model(cls.model)
+            model_inst = load_model(cls.model, device="cpu")
             cls._tokenizer = whisper.tokenizer.get_tokenizer(
                 model_inst.is_multilingual,
                 num_languages=model_inst.num_languages,
