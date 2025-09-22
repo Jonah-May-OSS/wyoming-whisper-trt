@@ -96,7 +96,9 @@ class AudioEncoderTRT(nn.Module):
     @torch.no_grad()
     def forward(self, x: Tensor) -> Tensor:
         n_audio_ctx = int(x.shape[2] // 2)
-        pos_embed = self.positional_embedding[-n_audio_ctx:, :]
+        pos_embed = self.positional_embedding[-n_audio_ctx:, :].to(
+            x.device, dtype=x.dtype, non_blocking=True
+        )
         x = self.engine(x, pos_embed)
         return x
 
@@ -393,7 +395,7 @@ class WhisperTRTBuilder:
             try:
                 gb = int(override.strip())
                 if gb <= 0:
-                    raise ValueError
+                    raise ValueError("Workspace size must be positive")
                 size = gb << 30
                 logger.debug(
                     "Using WYOMING_TRT_WORKSPACE_GB=%s -> %d bytes", override, size
@@ -405,11 +407,16 @@ class WhisperTRTBuilder:
                 )
 
         # dims-based detection with name fallback
-        dims = cls._load_model_once()
-        is_large_by_dims = (
-            getattr(dims, "n_text_state", 0) >= 1280
-            or getattr(dims, "n_audio_state", 0) >= 1280
-        )
+        try:
+            dims = cls._load_model_once()
+            is_large_by_dims = (
+                getattr(dims, "n_text_state", 0) >= 1280
+                or getattr(dims, "n_audio_state", 0) >= 1280
+            )
+        except Exception:
+            # If dims loading fails (offline/missing weights), fall back to name-only
+            is_large_by_dims = False
+
         model_key = cls.model.lower()
         is_large = is_large_by_dims or model_key in LARGE_MODELS
         return (1 << 32) if is_large else cls.max_workspace_size
@@ -512,7 +519,7 @@ class WhisperTRTBuilder:
         positional_embedding = model_inst.encoder.positional_embedding.detach()
         if cls.fp16_mode:
             positional_embedding = positional_embedding.half()
-        positional_embedding = positional_embedding.cuda(non_blocking=True)
+        positional_embedding = positional_embedding.cuda(non_blocking=True).contiguous()
         # Clear model instance early to free memory
         del model_inst
         torch.cuda.synchronize()
@@ -756,9 +763,8 @@ def load_trt_model(
         try:
             builder.build(path, verbose=verbose)
         except Exception as e:
-            # Handle potential memory issues during build
             msg = str(e).lower()
-            if any(
+            oom = any(
                 s in msg
                 for s in (
                     "out of memory",
@@ -768,21 +774,20 @@ def load_trt_model(
                     "cumemalloc",
                     "cuda error",
                 )
-            ):
+            )
+            if oom:
                 logger.exception("Failed to build model %s due to memory issues.", name)
-                # Try to free up memory
                 torch.cuda.empty_cache()
-                raise
-            logger.exception("Failed to build model %s", name)
+            else:
+                logger.exception("Failed to build model %s", name)
             raise
     # load the TRT model (already .cuda().eval() inside)
 
     try:
         trt_model = builder.load(path)
     except Exception as e:
-        logger.exception("Failed to load TRT model %s", name)
         msg = str(e).lower()
-        if any(
+        oom = any(
             s in msg
             for s in (
                 "out of memory",
@@ -792,11 +797,14 @@ def load_trt_model(
                 "cumemalloc",
                 "cuda error",
             )
-        ):
+        )
+        if oom:
             logger.exception(
-                "GPU memory insufficient for model %s. Consider using a smaller model.",
+                "Failed to load TRT model %s (GPU memory insufficient). Consider a smaller model.",
                 name,
             )
+        else:
+            logger.exception("Failed to load TRT model %s", name)
         raise
 
     # 1) Warm up with one very short silent buffer to clear cache
