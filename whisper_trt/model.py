@@ -380,7 +380,17 @@ class WhisperTRTBuilder:
 
     @classmethod
     def get_workspace_size(cls) -> int:
-        """Get appropriate workspace size based on model size."""
+        """
+        Get appropriate TensorRT workspace size based on model size.
+
+        Large models require more workspace memory during TensorRT optimization
+        to avoid segmentation faults. This method dynamically allocates workspace
+        memory based on the model type.
+
+        Returns:
+            int: Workspace size in bytes. Large models get 4GB (1 << 32),
+                 smaller models get 1GB (1 << 30).
+        """
         # Large models need more workspace memory to avoid segmentation faults
         large_models = {"large", "large-v2", "large-v3", "large-v3-turbo"}
         if cls.model in large_models:
@@ -391,6 +401,16 @@ class WhisperTRTBuilder:
     @classmethod
     @torch.no_grad()
     def _load_model_once(cls) -> ModelDimensions:
+        """
+        Load model dimensions once and cache them with proper memory cleanup.
+
+        This method loads the Whisper model to extract its dimensions and then
+        immediately frees the model from GPU memory to prevent accumulation,
+        which is especially important for large models.
+
+        Returns:
+            ModelDimensions: The cached model dimensions.
+        """
         if cls._dims is None:
             model_inst = load_model(cls.model).cuda().eval()
             cls._dims = model_inst.dims
@@ -402,6 +422,16 @@ class WhisperTRTBuilder:
     @classmethod
     @torch.no_grad()
     def build_text_decoder_engine(cls) -> torch2trt.TRTModule:
+        """
+        Build TensorRT engine for text decoder with improved memory management.
+
+        This method builds a TensorRT-optimized version of the text decoder
+        while implementing proper memory cleanup to prevent GPU memory
+        accumulation, especially important for large models.
+
+        Returns:
+            torch2trt.TRTModule: Optimized TensorRT text decoder engine.
+        """
         dims = cls._load_model_once()
         model_inst = load_model(cls.model).cuda().eval()
         decoder_blocks_module = _TextDecoderEngine(model_inst.decoder.blocks)
@@ -442,6 +472,16 @@ class WhisperTRTBuilder:
     @classmethod
     @torch.no_grad()
     def build_audio_encoder_engine(cls) -> torch2trt.TRTModule:
+        """
+        Build TensorRT engine for audio encoder with improved memory management.
+
+        This method builds a TensorRT-optimized version of the audio encoder
+        while implementing proper memory cleanup to prevent GPU memory
+        accumulation, especially important for large models.
+
+        Returns:
+            torch2trt.TRTModule: Optimized TensorRT audio encoder engine.
+        """
         dims = cls._load_model_once()
         model_inst = load_model(cls.model).cuda().eval()
         encoder_module = _AudioEncoderEngine(

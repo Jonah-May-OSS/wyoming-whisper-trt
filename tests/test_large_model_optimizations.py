@@ -1,4 +1,10 @@
-"""Test for large model memory optimizations."""
+"""
+Test module for large model memory optimizations.
+
+This module tests the memory management improvements made to WhisperTRTBuilder
+to fix segmentation faults with large models by implementing dynamic workspace
+allocation and proper GPU memory cleanup.
+"""
 
 import unittest
 import sys
@@ -32,10 +38,22 @@ with patch.dict("sys.modules", mock_modules):
 
 
 class TestLargeModelOptimizations(unittest.TestCase):
-    """Test that large models get appropriate memory allocations."""
+    """
+    Test suite for large model memory optimizations.
+
+    These tests verify that the workspace memory allocation and memory
+    management improvements correctly address segmentation faults with
+    large models while maintaining compatibility with smaller models.
+    """
 
     def test_workspace_size_for_large_models(self):
-        """Test that large models get more workspace memory."""
+        """
+        Test that large models receive increased TensorRT workspace memory.
+
+        Verifies that large models (large, large-v2, large-v3, large-v3-turbo)
+        get 4GB of workspace memory instead of the default 1GB to prevent
+        segmentation faults during TensorRT optimization.
+        """
         # Large models should get 4GB workspace
         large_workspace = LargeV3TurboBuilder.get_workspace_size()
         expected_large = 1 << 32  # 4GB
@@ -46,7 +64,13 @@ class TestLargeModelOptimizations(unittest.TestCase):
         )
 
     def test_workspace_size_for_small_models(self):
-        """Test that small models get standard workspace memory."""
+        """
+        Test that small models maintain standard workspace memory allocation.
+
+        Verifies that small and medium models continue to receive 1GB of
+        workspace memory, ensuring no behavioral changes for models that
+        were working correctly.
+        """
         # Small models should get 1GB workspace
         tiny_workspace = TinyBuilder.get_workspace_size()
         expected_tiny = 1 << 30  # 1GB
@@ -57,7 +81,13 @@ class TestLargeModelOptimizations(unittest.TestCase):
         )
 
     def test_large_model_identification(self):
-        """Test that all large model variants are properly identified."""
+        """
+        Test that all large model variants are correctly identified.
+
+        Ensures that the model classification logic properly identifies
+        all variants of large models (large, large-v2, large-v3, large-v3-turbo)
+        and assigns them the increased workspace memory allocation.
+        """
         large_models = {"large", "large-v2", "large-v3", "large-v3-turbo"}
 
         class TestBuilder(WhisperTRTBuilder):
@@ -72,7 +102,13 @@ class TestLargeModelOptimizations(unittest.TestCase):
             )
 
     def test_small_model_identification(self):
-        """Test that small models get standard workspace allocation."""
+        """
+        Test that small models maintain standard workspace allocation.
+
+        Verifies that all non-large model variants (tiny, base, small, medium,
+        and English-only variants) continue to receive the standard 1GB
+        workspace allocation, ensuring backward compatibility.
+        """
         small_models = {
             "tiny",
             "base",
