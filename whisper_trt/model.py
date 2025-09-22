@@ -96,9 +96,8 @@ class AudioEncoderTRT(nn.Module):
     @torch.no_grad()
     def forward(self, x: Tensor) -> Tensor:
         n_audio_ctx = int(x.shape[2] // 2)
-        pos_embed = self.positional_embedding[-n_audio_ctx:, :].to(
-            x.device, dtype=x.dtype
-        )
+        pos_start = self.positional_embedding.shape[0] - n_audio_ctx
+        pos_embed = self.positional_embedding[pos_start:, :].to(x.device, dtype=x.dtype)
         x = self.engine(x, pos_embed)
         return x
 
@@ -147,8 +146,12 @@ class TextDecoderTRT(nn.Module):
     @torch.no_grad()
     def forward(self, x: Tensor, xa: Tensor) -> Tensor:
         offset = 0
-        token_emb = self.token_embedding(x).to(xa.device, dtype=xa.dtype)
-        pos_emb = self.positional_embedding[offset : offset + x.shape[-1]].to(xa.device, dtype=xa.dtype)
+        token_emb = self.token_embedding(x)
+        if token_emb.device != xa.device or token_emb.dtype != xa.dtype:
+            token_emb = token_emb.to(xa.device, dtype=xa.dtype)
+        pos_emb = self.positional_embedding[offset : offset + x.shape[-1]]
+        if pos_emb.device != xa.device or pos_emb.dtype != xa.dtype:
+            pos_emb = pos_emb.to(xa.device, dtype=xa.dtype)
         x = token_emb + pos_emb
         mask = self.mask.to(xa.device)
         x = self.engine(x, xa, mask)
@@ -540,7 +543,9 @@ class WhisperTRTBuilder:
             n_frames = dims.n_audio_ctx * 2
             dtype = torch.float16 if cls.fp16_mode else torch.float32
             x = torch.randn(1, dims.n_mels, n_frames, device="cuda", dtype=dtype)
-            positional_embedding = model_inst.encoder.positional_embedding.detach()
+            positional_embedding = (
+                model_inst.encoder.positional_embedding.detach().cpu()
+            )
             if cls.fp16_mode:
                 positional_embedding = positional_embedding.half()
             positional_embedding = (
@@ -787,7 +792,7 @@ def load_trt_model(
     )
 
     if name not in MODEL_BUILDERS:
-        raise RuntimeError(f"Model '{name}' is not supported by WhisperTRT.")
+        raise RuntimeError("Model not supported by WhisperTRT")
     # determine on-disk path
 
     if path is None:
@@ -796,7 +801,7 @@ def load_trt_model(
     builder = MODEL_BUILDERS[name]
     if not os.path.exists(path):
         if not build:
-            raise RuntimeError(f"No model found at {path}; pass build=True.")
+            raise RuntimeError("No model found; pass build=True")
         try:
             builder.build(path, verbose=verbose)
         except (RuntimeError, OSError, ImportError, ValueError) as e:
