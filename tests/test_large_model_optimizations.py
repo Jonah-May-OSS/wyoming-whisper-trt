@@ -50,6 +50,18 @@ class TestLargeModelOptimizations(unittest.TestCase):
     large models while maintaining compatibility with smaller models.
     """
 
+    def setUp(self):
+        """Set up test fixtures with proper dimension mocking."""
+        # Create mock dimensions for large models
+        self.large_dims_mock = MagicMock()
+        self.large_dims_mock.n_text_state = 1280  # Large model threshold
+        self.large_dims_mock.n_audio_state = 1280
+
+        # Create mock dimensions for small models
+        self.small_dims_mock = MagicMock()
+        self.small_dims_mock.n_text_state = 512  # Below threshold
+        self.small_dims_mock.n_audio_state = 512
+
     def test_workspace_size_for_large_models(self):
         """
         Test that large models receive increased TensorRT workspace memory.
@@ -58,14 +70,17 @@ class TestLargeModelOptimizations(unittest.TestCase):
         get 4GB of workspace memory instead of the default 1GB to prevent
         segmentation faults during TensorRT optimization.
         """
-        # Large models should get 4GB workspace
-        large_workspace = LargeV3TurboBuilder.get_workspace_size()
-        expected_large = 1 << 32  # 4GB
-        self.assertEqual(
-            large_workspace,
-            expected_large,
-            f"Large models should get 4GB workspace, got {large_workspace / (1024**3):.1f}GB",
-        )
+        # Mock _load_model_once to return large model dimensions
+        with patch.object(
+            LargeV3TurboBuilder, "_load_model_once", return_value=self.large_dims_mock
+        ):
+            large_workspace = LargeV3TurboBuilder.get_workspace_size()
+            expected_large = 1 << 32  # 4GB
+            self.assertEqual(
+                large_workspace,
+                expected_large,
+                f"Large models should get 4GB workspace, got {large_workspace / (1024**3):.1f}GB",
+            )
 
     def test_workspace_size_for_small_models(self):
         """
@@ -75,14 +90,17 @@ class TestLargeModelOptimizations(unittest.TestCase):
         workspace memory, ensuring no behavioral changes for models that
         were working correctly.
         """
-        # Small models should get 1GB workspace
-        tiny_workspace = TinyBuilder.get_workspace_size()
-        expected_tiny = 1 << 30  # 1GB
-        self.assertEqual(
-            tiny_workspace,
-            expected_tiny,
-            f"Small models should get 1GB workspace, got {tiny_workspace / (1024**3):.1f}GB",
-        )
+        # Mock _load_model_once to return small model dimensions
+        with patch.object(
+            TinyBuilder, "_load_model_once", return_value=self.small_dims_mock
+        ):
+            tiny_workspace = TinyBuilder.get_workspace_size()
+            expected_tiny = 1 << 30  # 1GB
+            self.assertEqual(
+                tiny_workspace,
+                expected_tiny,
+                f"Small models should get 1GB workspace, got {tiny_workspace / (1024**3):.1f}GB",
+            )
 
     def test_large_model_identification(self):
         """
@@ -99,11 +117,15 @@ class TestLargeModelOptimizations(unittest.TestCase):
 
         for model in large_models:
             TestBuilder.model = model
-            workspace = TestBuilder.get_workspace_size()
-            expected = 1 << 32  # 4GB
-            self.assertEqual(
-                workspace, expected, f"Model {model} should get 4GB workspace"
-            )
+            # Mock _load_model_once to return large model dimensions for name-based detection
+            with patch.object(
+                TestBuilder, "_load_model_once", return_value=self.large_dims_mock
+            ):
+                workspace = TestBuilder.get_workspace_size()
+                expected = 1 << 32  # 4GB
+                self.assertEqual(
+                    workspace, expected, f"Model {model} should get 4GB workspace"
+                )
 
     def test_small_model_identification(self):
         """
@@ -128,11 +150,15 @@ class TestLargeModelOptimizations(unittest.TestCase):
 
         for model in small_models:
             TestBuilder.model = model
-            workspace = TestBuilder.get_workspace_size()
-            expected = 1 << 30  # 1GB
-            self.assertEqual(
-                workspace, expected, f"Model {model} should get 1GB workspace"
-            )
+            # Mock _load_model_once to return small model dimensions
+            with patch.object(
+                TestBuilder, "_load_model_once", return_value=self.small_dims_mock
+            ):
+                workspace = TestBuilder.get_workspace_size()
+                expected = 1 << 30  # 1GB
+                self.assertEqual(
+                    workspace, expected, f"Model {model} should get 1GB workspace"
+                )
 
 
 if __name__ == "__main__":

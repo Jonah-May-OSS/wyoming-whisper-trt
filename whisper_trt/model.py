@@ -384,21 +384,27 @@ class WhisperTRTBuilder:
     @classmethod
     def get_workspace_size(cls) -> int:
         """
-        Get appropriate TensorRT workspace size based on model size.
-
-        Large models require more workspace memory during TensorRT optimization
-        to avoid segmentation faults. This method dynamically allocates workspace
-        memory based on the model type.
-
-        Returns:
-            int: Workspace size in bytes. Large models get 4GB (1 << 32),
-                 smaller models get 1GB (1 << 30).
+        Choose TensorRT workspace based on model dims with name-based fallback.
+        Env override: WYOMING_TRT_WORKSPACE_GB (integer GB).
         """
-        # Large models need more workspace memory to avoid segmentation faults
-        if cls.model in LARGE_MODELS:
-            # Use 4GB workspace for large models (was 1GB)
-            return 1 << 32  # 4GB
-        return cls.max_workspace_size  # 1GB for smaller models
+        # env override (in GB) takes precedence
+        override = os.getenv("WYOMING_TRT_WORKSPACE_GB")
+        if override:
+            try:
+                return int(override) << 30
+            except ValueError:
+                logger.warning(
+                    "Invalid WYOMING_TRT_WORKSPACE_GB=%r; ignoring.", override
+                )
+
+        # dims-based detection with name fallback
+        dims = cls._load_model_once()
+        is_large_by_dims = (
+            getattr(dims, "n_text_state", 0) >= 1280
+            or getattr(dims, "n_audio_state", 0) >= 1280
+        )
+        is_large = is_large_by_dims or cls.model in LARGE_MODELS
+        return (1 << 32) if is_large else cls.max_workspace_size
 
     @classmethod
     @torch.no_grad()
@@ -414,11 +420,9 @@ class WhisperTRTBuilder:
             ModelDimensions: The cached model dimensions.
         """
         if cls._dims is None:
-            model_inst = load_model(cls.model).cuda().eval()
+            model_inst = load_model(cls.model).eval()  # CPU is sufficient for dims
             cls._dims = model_inst.dims
-            # Clean up the model instance to free memory for large models
             del model_inst
-            torch.cuda.empty_cache()
         return cls._dims
 
     @classmethod
@@ -522,27 +526,29 @@ class WhisperTRTBuilder:
     @classmethod
     @torch.no_grad()
     def get_text_decoder_extra_state(cls) -> Dict[str, Any]:
-        model_inst = load_model(cls.model).cuda().eval()
+        model_inst = load_model(cls.model).eval()  # CPU is enough
         extra_state = {
             "token_embedding": model_inst.decoder.token_embedding.state_dict(),
             "positional_embedding": model_inst.decoder.positional_embedding,
             "ln": model_inst.decoder.ln.state_dict(),
             "mask": model_inst.decoder.mask,
         }
+        del model_inst
         return extra_state
 
     @classmethod
     @torch.no_grad()
     def get_audio_encoder_extra_state(cls) -> Dict[str, Any]:
-        model_inst = load_model(cls.model).cuda().eval()
+        model_inst = load_model(cls.model).eval()  # CPU is enough
         extra_state = {"positional_embedding": model_inst.encoder.positional_embedding}
+        del model_inst
         return extra_state
 
     @classmethod
     @torch.no_grad()
     def build(cls, output_path: str, verbose: bool = False) -> None:
         cls.verbose = verbose
-        dims = asdict(load_model(cls.model).dims)
+        dims = asdict(cls._load_model_once())  # Reuse cached dims
         checkpoint = {
             "whisper_trt_version": __version__,
             "dims": dims,
@@ -742,8 +748,9 @@ def load_trt_model(
                 logger.exception("Failed to build model %s due to memory issues.", name)
                 # Try to free up memory
                 torch.cuda.empty_cache()
-                raise RuntimeError(f"Memory error building {name}") from e
-            raise RuntimeError(f"Failed to build model {name}") from e
+                raise
+            logger.exception("Failed to build model %s", name)
+            raise
     # load the TRT model (already .cuda().eval() inside)
 
     try:
@@ -751,7 +758,7 @@ def load_trt_model(
     except Exception as e:
         logger.exception("Failed to load TRT model %s", name)
         if "out of memory" in str(e).lower():
-            logger.error(
+            logger.exception(
                 "GPU memory insufficient for model %s. Consider using a smaller model.",
                 name,
             )
