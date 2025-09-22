@@ -797,7 +797,7 @@ def load_trt_model(
             raise RuntimeError(f"No model found at {path}; pass build=True.")
         try:
             builder.build(path, verbose=verbose)
-        except Exception as e:
+        except (RuntimeError, OSError, ImportError, ValueError) as e:
             msg = str(e).lower()
             oom = any(
                 s in msg
@@ -824,7 +824,7 @@ def load_trt_model(
 
     try:
         trt_model = builder.load(path)
-    except Exception as e:
+    except (RuntimeError, OSError, ImportError, ValueError) as e:
         msg = str(e).lower()
         oom = any(
             s in msg
@@ -852,6 +852,6 @@ def load_trt_model(
     try:
         silence = np.zeros((whisper.audio.N_SAMPLES,), dtype=np.float32)
         _ = trt_model.transcribe(silence, language=language, stream=False)
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         logger.debug("Warm-up skipped: %s", e)
     return trt_model
