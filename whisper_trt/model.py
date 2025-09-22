@@ -147,13 +147,13 @@ class TextDecoderTRT(nn.Module):
     @torch.no_grad()
     def forward(self, x: Tensor, xa: Tensor) -> Tensor:
         offset = 0
-        token_emb = self.token_embedding(x).to(xa.device)
-        pos_emb = self.positional_embedding[offset : offset + x.shape[-1]].to(xa.device)
+        token_emb = self.token_embedding(x).to(xa.device, dtype=xa.dtype)
+        pos_emb = self.positional_embedding[offset : offset + x.shape[-1]].to(xa.device, dtype=xa.dtype)
         x = token_emb + pos_emb
         mask = self.mask.to(xa.device)
         x = self.engine(x, xa, mask)
         x = self.ln(x)
-        weight = self.token_embedding.weight.to(x.device)
+        weight = self.token_embedding.weight.to(x.device, dtype=x.dtype)
         logits = (x @ torch.transpose(weight, 0, 1)).float()
         return logits
 
@@ -291,11 +291,13 @@ class WhisperTRT(nn.Module):
 
             if initial_prompt:
                 prompt_ids = self.tokenizer.encode(initial_prompt)
-                n = len(prompt_ids)
-                out_tokens[0, cur_len : cur_len + n] = torch.tensor(
-                    prompt_ids, device=audio_features.device
-                )
-                cur_len += n
+                available = max_len - cur_len
+                if available > 0:
+                    k = min(len(prompt_ids), available)
+                    out_tokens[0, cur_len : cur_len + k] = torch.tensor(
+                        prompt_ids[:k], device=audio_features.device
+                    )
+                    cur_len += k
             # Prefix length for decoding (SOT + lang/task/notimestamps + initial prompt)
 
             prompt_len = cur_len
@@ -419,7 +421,7 @@ class WhisperTRTBuilder:
                 getattr(dims, "n_text_state", 0) >= 1280
                 or getattr(dims, "n_audio_state", 0) >= 1280
             )
-        except (OSError, RuntimeError, ImportError) as e:
+        except (OSError, RuntimeError, ImportError, ValueError) as e:
             logger.debug("Could not load model dimensions for workspace sizing: %s", e)
             is_large_by_dims = False
 
