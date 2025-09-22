@@ -395,12 +395,16 @@ class WhisperTRTBuilder:
             try:
                 gb = int(override.strip())
                 if gb <= 0:
-                    raise ValueError("Workspace size must be positive")
-                size = gb << 30
-                logger.debug(
-                    "Using WYOMING_TRT_WORKSPACE_GB=%s -> %d bytes", override, size
-                )
-                return size
+                    logger.warning(
+                        "Invalid WYOMING_TRT_WORKSPACE_GB=%r; must be positive.",
+                        override,
+                    )
+                else:
+                    size = gb << 30
+                    logger.debug(
+                        "Using WYOMING_TRT_WORKSPACE_GB=%s -> %d bytes", override, size
+                    )
+                    return size
             except ValueError:
                 logger.warning(
                     "Invalid WYOMING_TRT_WORKSPACE_GB=%r; ignoring.", override
@@ -413,8 +417,8 @@ class WhisperTRTBuilder:
                 getattr(dims, "n_text_state", 0) >= 1280
                 or getattr(dims, "n_audio_state", 0) >= 1280
             )
-        except Exception:
-            # If dims loading fails (offline/missing weights), fall back to name-only
+        except (OSError, RuntimeError, ImportError) as e:
+            logger.debug("Could not load model dimensions for workspace sizing: %s", e)
             is_large_by_dims = False
 
         model_key = cls.model.lower()
