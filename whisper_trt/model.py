@@ -369,6 +369,9 @@ class WhisperTRT(nn.Module):
 # BUILDER CLASSES FOR MULTILINGUAL AND ENGLISH-ONLY MODELS
 # -----------------------------------------------------------------------------
 
+# Models that require increased workspace memory to avoid segmentation faults
+LARGE_MODELS = {"large", "large-v2", "large-v3", "large-v3-turbo"}
+
 
 class WhisperTRTBuilder:
     model: str
@@ -392,8 +395,7 @@ class WhisperTRTBuilder:
                  smaller models get 1GB (1 << 30).
         """
         # Large models need more workspace memory to avoid segmentation faults
-        large_models = {"large", "large-v2", "large-v3", "large-v3-turbo"}
-        if cls.model in large_models:
+        if cls.model in LARGE_MODELS:
             # Use 4GB workspace for large models (was 1GB)
             return 1 << 32  # 4GB
         return cls.max_workspace_size  # 1GB for smaller models
@@ -737,20 +739,17 @@ def load_trt_model(
                 "out of memory" in str(e).lower()
                 or "segmentation fault" in str(e).lower()
             ):
-                logger.error(
-                    "Failed to build model %s due to memory issues. "
-                    "This may happen with large models on systems with insufficient GPU memory.",
-                    name,
-                )
+                logger.exception("Failed to build model %s due to memory issues.", name)
                 # Try to free up memory
                 torch.cuda.empty_cache()
-            raise RuntimeError(f"Failed to build model {name}: {e}") from e
+                raise RuntimeError(f"Memory error building {name}") from e
+            raise RuntimeError(f"Failed to build model {name}") from e
     # load the TRT model (already .cuda().eval() inside)
 
     try:
         trt_model = builder.load(path)
     except Exception as e:
-        logger.error("Failed to load TRT model %s: %s", name, e)
+        logger.exception("Failed to load TRT model %s", name)
         if "out of memory" in str(e).lower():
             logger.error(
                 "GPU memory insufficient for model %s. Consider using a smaller model.",

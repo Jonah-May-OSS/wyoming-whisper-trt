@@ -6,8 +6,10 @@ to fix segmentation faults with large models by implementing dynamic workspace
 allocation and proper GPU memory cleanup.
 """
 
+import os
 import unittest
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 # Mock all torch-related modules at import time
@@ -31,7 +33,9 @@ mock_modules = {
 }
 
 # Add the whisper_trt directory to sys.path
-sys.path.insert(0, "/home/runner/work/wyoming-whisper-trt/wyoming-whisper-trt")
+# Get the repository root (parent of tests directory)
+repo_root = Path(__file__).parent.parent
+sys.path.insert(0, str(repo_root))
 
 with patch.dict("sys.modules", mock_modules):
     from whisper_trt.model import WhisperTRTBuilder, LargeV3TurboBuilder, TinyBuilder
