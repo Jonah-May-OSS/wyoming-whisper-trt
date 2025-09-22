@@ -97,7 +97,7 @@ class AudioEncoderTRT(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         n_audio_ctx = int(x.shape[2] // 2)
         pos_embed = self.positional_embedding[-n_audio_ctx:, :].to(
-            x.device, dtype=x.dtype, non_blocking=True
+            x.device, dtype=x.dtype
         )
         x = self.engine(x, pos_embed)
         return x
@@ -387,22 +387,24 @@ class WhisperTRTBuilder:
     def get_workspace_size(cls) -> int:
         """
         Choose TensorRT workspace based on model dims with name-based fallback.
-        Env override: WYOMING_TRT_WORKSPACE_GB (integer GB).
+        Env override: WYOMING_TRT_WORKSPACE_GB (float GB).
         """
         # env override (in GB) takes precedence
         override = os.getenv("WYOMING_TRT_WORKSPACE_GB")
         if override:
             try:
-                gb = int(override.strip())
+                gb = float(override.strip())
                 if gb <= 0:
                     logger.warning(
                         "Invalid WYOMING_TRT_WORKSPACE_GB=%r; must be positive.",
                         override,
                     )
                 else:
-                    size = gb << 30
+                    size = int(gb * (1 << 30))
                     logger.debug(
-                        "Using WYOMING_TRT_WORKSPACE_GB=%s -> %d bytes", override, size
+                        "Using WYOMING_TRT_WORKSPACE_GB=%s -> %d bytes",
+                        override,
+                        size,
                     )
                     return size
             except ValueError:
@@ -423,7 +425,16 @@ class WhisperTRTBuilder:
 
         model_key = cls.model.lower()
         is_large = is_large_by_dims or model_key in LARGE_MODELS
-        return (1 << 32) if is_large else cls.max_workspace_size
+        if is_large:
+            logger.debug(
+                "Workspace via %s: 4 GiB (dims_large=%s, name_large=%s)",
+                "dims" if is_large_by_dims else "name",
+                is_large_by_dims,
+                model_key in LARGE_MODELS,
+            )
+            return 1 << 32
+        logger.debug("Workspace via default: %d bytes", cls.max_workspace_size)
+        return cls.max_workspace_size
 
     @classmethod
     @torch.no_grad()
@@ -439,11 +450,11 @@ class WhisperTRTBuilder:
             ModelDimensions: The cached model dimensions.
         """
         if cls._dims is None:
-            model_inst = load_model(
-                cls.model, device="cpu"
-            ).eval()  # CPU is sufficient for dims
-            cls._dims = model_inst.dims
-            del model_inst
+            model_inst = load_model(cls.model, device="cpu").eval()
+            try:
+                cls._dims = model_inst.dims
+            finally:
+                del model_inst
         return cls._dims
 
     @classmethod
@@ -467,9 +478,12 @@ class WhisperTRTBuilder:
         torch.cuda.synchronize()
         torch.cuda.empty_cache()
 
-        x = torch.randn(1, 1, dims.n_text_state).cuda()
-        xa = torch.randn(1, dims.n_audio_ctx, dims.n_audio_state).cuda()
-        mask = torch.randn(dims.n_text_ctx, dims.n_text_ctx).cuda()
+        dtype = torch.float16 if cls.fp16_mode else torch.float32
+        x = torch.randn(1, 1, dims.n_text_state, device="cuda", dtype=dtype)
+        xa = torch.randn(
+            1, dims.n_audio_ctx, dims.n_audio_state, device="cuda", dtype=dtype
+        )
+        mask = torch.randn(dims.n_text_ctx, dims.n_text_ctx, device="cuda", dtype=dtype)
         engine = torch2trt.torch2trt(
             decoder_blocks_module,
             [x, xa, mask],
@@ -519,11 +533,14 @@ class WhisperTRTBuilder:
             model_inst.encoder.ln_post,
         )
         n_frames = dims.n_audio_ctx * 2
-        x = torch.randn(1, dims.n_mels, n_frames).cuda()
+        dtype = torch.float16 if cls.fp16_mode else torch.float32
+        x = torch.randn(1, dims.n_mels, n_frames, device="cuda", dtype=dtype)
         positional_embedding = model_inst.encoder.positional_embedding.detach()
         if cls.fp16_mode:
             positional_embedding = positional_embedding.half()
-        positional_embedding = positional_embedding.cuda(non_blocking=True).contiguous()
+        positional_embedding = (
+            positional_embedding.pin_memory().cuda(non_blocking=True).contiguous()
+        )
         # Clear model instance early to free memory
         del model_inst
         torch.cuda.synchronize()
@@ -608,7 +625,9 @@ class WhisperTRTBuilder:
         audio_encoder_engine = torch2trt.TRTModule().cuda()
         audio_encoder_engine.load_state_dict(checkpoint["audio_encoder_engine"])
         aes = checkpoint["audio_encoder_extra_state"]
-        audio_positional_embedding = aes["positional_embedding"]
+        audio_positional_embedding = (
+            aes["positional_embedding"].contiguous().cuda(non_blocking=True)
+        )
         encoder = AudioEncoderTRT(audio_encoder_engine, audio_positional_embedding)
         # Text decoder.
 
@@ -780,7 +799,11 @@ def load_trt_model(
                 )
             )
             if oom:
-                logger.exception("Failed to build model %s due to memory issues.", name)
+                logger.exception(
+                    "Failed to build model %s due to memory issues. "
+                    "Try setting WYOMING_TRT_WORKSPACE_GB (e.g., 4) or selecting a smaller model.",
+                    name,
+                )
                 torch.cuda.empty_cache()
             else:
                 logger.exception("Failed to build model %s", name)
@@ -807,6 +830,7 @@ def load_trt_model(
                 "Failed to load TRT model %s (GPU memory insufficient). Consider a smaller model.",
                 name,
             )
+            torch.cuda.empty_cache()
         else:
             logger.exception("Failed to load TRT model %s", name)
         raise
