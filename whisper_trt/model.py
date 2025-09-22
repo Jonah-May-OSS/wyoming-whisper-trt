@@ -370,7 +370,7 @@ class WhisperTRT(nn.Module):
 # -----------------------------------------------------------------------------
 
 # Models that require increased workspace memory to avoid segmentation faults
-LARGE_MODELS = {"large", "large-v2", "large-v3", "large-v3-turbo"}
+LARGE_MODELS = frozenset({"large", "large-v2", "large-v3", "large-v3-turbo"})
 
 
 class WhisperTRTBuilder:
@@ -391,7 +391,14 @@ class WhisperTRTBuilder:
         override = os.getenv("WYOMING_TRT_WORKSPACE_GB")
         if override:
             try:
-                return int(override) << 30
+                gb = int(override.strip())
+                if gb <= 0:
+                    raise ValueError
+                size = gb << 30
+                logger.debug(
+                    "Using WYOMING_TRT_WORKSPACE_GB=%s -> %d bytes", override, size
+                )
+                return size
             except ValueError:
                 logger.warning(
                     "Invalid WYOMING_TRT_WORKSPACE_GB=%r; ignoring.", override
@@ -403,7 +410,8 @@ class WhisperTRTBuilder:
             getattr(dims, "n_text_state", 0) >= 1280
             or getattr(dims, "n_audio_state", 0) >= 1280
         )
-        is_large = is_large_by_dims or cls.model in LARGE_MODELS
+        model_key = cls.model.lower()
+        is_large = is_large_by_dims or model_key in LARGE_MODELS
         return (1 << 32) if is_large else cls.max_workspace_size
 
     @classmethod
@@ -413,7 +421,7 @@ class WhisperTRTBuilder:
         Load model dimensions once and cache them with proper memory cleanup.
 
         This method loads the Whisper model to extract its dimensions and then
-        immediately frees the model from GPU memory to prevent accumulation,
+        immediately frees the model object to prevent memory accumulation,
         which is especially important for large models.
 
         Returns:
@@ -445,6 +453,7 @@ class WhisperTRTBuilder:
         decoder_blocks_module = _TextDecoderEngine(model_inst.decoder.blocks)
         # Clear model instance early to free memory
         del model_inst
+        torch.cuda.synchronize()
         torch.cuda.empty_cache()
 
         x = torch.randn(1, 1, dims.n_text_state).cuda()
@@ -500,9 +509,13 @@ class WhisperTRTBuilder:
         )
         n_frames = dims.n_audio_ctx * 2
         x = torch.randn(1, dims.n_mels, n_frames).cuda()
-        positional_embedding = model_inst.encoder.positional_embedding.cuda().detach()
+        positional_embedding = model_inst.encoder.positional_embedding.detach()
+        if cls.fp16_mode:
+            positional_embedding = positional_embedding.half()
+        positional_embedding = positional_embedding.cuda(non_blocking=True)
         # Clear model instance early to free memory
         del model_inst
+        torch.cuda.synchronize()
         torch.cuda.empty_cache()
         engine = torch2trt.torch2trt(
             encoder_module,
@@ -571,6 +584,7 @@ class WhisperTRTBuilder:
                 language=None,
                 task="transcribe",
             )
+            del model_inst
         return cls._tokenizer
 
     @classmethod
@@ -741,11 +755,19 @@ def load_trt_model(
             raise RuntimeError(f"No model found at {path}; pass build=True.")
         try:
             builder.build(path, verbose=verbose)
-        except RuntimeError as e:
+        except Exception as e:
             # Handle potential memory issues during build
-            if (
-                "out of memory" in str(e).lower()
-                or "segmentation fault" in str(e).lower()
+            msg = str(e).lower()
+            if any(
+                s in msg
+                for s in (
+                    "out of memory",
+                    "cuda out of memory",
+                    "cudnn",
+                    "cublas",
+                    "cumemalloc",
+                    "cuda error",
+                )
             ):
                 logger.exception("Failed to build model %s due to memory issues.", name)
                 # Try to free up memory
@@ -759,7 +781,18 @@ def load_trt_model(
         trt_model = builder.load(path)
     except Exception as e:
         logger.exception("Failed to load TRT model %s", name)
-        if "out of memory" in str(e).lower():
+        msg = str(e).lower()
+        if any(
+            s in msg
+            for s in (
+                "out of memory",
+                "cuda out of memory",
+                "cudnn",
+                "cublas",
+                "cumemalloc",
+                "cuda error",
+            )
+        ):
             logger.exception(
                 "GPU memory insufficient for model %s. Consider using a smaller model.",
                 name,
