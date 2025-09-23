@@ -560,7 +560,10 @@ class WhisperTRTBuilder:
             encoder_module,
             [x, positional_embedding],
             use_onnx=True,
-            min_shapes=[(1, dims.n_mels, 1), (1, dims.n_audio_state)],
+            min_shapes=[
+                (1, dims.n_mels, 1), 
+                (dims.n_audio_ctx, dims.n_audio_state)
+            ],
             opt_shapes=[
                 (1, dims.n_mels, n_frames),
                 (dims.n_audio_ctx, dims.n_audio_state),
@@ -661,6 +664,8 @@ class WhisperTRTBuilder:
         if cls.fp16_mode:
             text_token_embedding = text_token_embedding.half()
         text_positional_embedding = nn.Parameter(tes["positional_embedding"]).cuda()
+        if cls.fp16_mode:
+            text_positional_embedding = text_positional_embedding.half()
         text_ln = LayerNorm(dims.n_text_state)
         text_ln.load_state_dict(tes["ln"])
         text_mask = tes["mask"]
@@ -799,7 +804,7 @@ def load_trt_model(
     )
 
     if name not in MODEL_BUILDERS:
-        raise RuntimeError("Model not supported by WhisperTRT")
+        raise RuntimeError("Unsupported model")
     # determine on-disk path
 
     if path is None:
@@ -808,7 +813,7 @@ def load_trt_model(
     builder = MODEL_BUILDERS[name]
     if not os.path.exists(path):
         if not build:
-            raise RuntimeError("No model found; pass build=True")
+            raise RuntimeError("Build required")
         try:
             builder.build(path, verbose=verbose)
         except (RuntimeError, OSError, ImportError, ValueError) as e:
