@@ -647,6 +647,8 @@ class WhisperTRTBuilder:
         audio_positional_embedding = (
             aes["positional_embedding"].contiguous().cuda(non_blocking=True)
         )
+        if cls.fp16_mode:
+            audio_positional_embedding = audio_positional_embedding.half()
         encoder = AudioEncoderTRT(audio_encoder_engine, audio_positional_embedding)
         # Text decoder.
 
@@ -655,12 +657,17 @@ class WhisperTRTBuilder:
         tes = checkpoint["text_decoder_extra_state"]
         text_token_embedding = nn.Embedding(dims.n_vocab, dims.n_text_state)
         text_token_embedding.load_state_dict(tes["token_embedding"])
+        text_token_embedding = text_token_embedding.cuda()
+        if cls.fp16_mode:
+            text_token_embedding = text_token_embedding.half()
         text_positional_embedding = nn.Parameter(tes["positional_embedding"]).cuda()
         text_ln = LayerNorm(dims.n_text_state)
         text_ln.load_state_dict(tes["ln"])
         text_mask = tes["mask"]
         if not text_mask.is_cuda:
             text_mask = text_mask.cuda()
+        if cls.fp16_mode and text_mask.dtype != torch.float16:
+            text_mask = text_mask.half()
         decoder = TextDecoderTRT(
             text_decoder_engine,
             text_token_embedding,
