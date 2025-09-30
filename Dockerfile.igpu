@@ -1,5 +1,5 @@
 # Use the base TensorRT image
-FROM nvcr.io/nvidia/tensorrt:25.08-py3-igpu
+FROM nvcr.io/nvidia/tensorrt:25.09-py3-igpu
 
 WORKDIR /usr/src
 
