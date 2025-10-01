@@ -560,10 +560,7 @@ class WhisperTRTBuilder:
             encoder_module,
             [x, positional_embedding],
             use_onnx=True,
-            min_shapes=[
-                (1, dims.n_mels, 1), 
-                (dims.n_audio_ctx, dims.n_audio_state)
-            ],
+            min_shapes=[(1, dims.n_mels, 1), (dims.n_audio_ctx, dims.n_audio_state)],
             opt_shapes=[
                 (1, dims.n_mels, n_frames),
                 (dims.n_audio_ctx, dims.n_audio_state),
