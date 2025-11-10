@@ -56,9 +56,9 @@ async def test_faster_whisper() -> None:
         assert len(info.asr) == 1, "Expected one asr service"
         asr = info.asr[0]
         assert len(asr.models) > 0, "Expected at least one model"
-        assert any(m.name == "tiny-int8" for m in asr.models), (
-            "Expected tiny-int8 model"
-        )
+        assert any(
+            m.name == "tiny-int8" for m in asr.models
+        ), "Expected tiny-int8 model"
         break
     # We want to use the whisper model
 
