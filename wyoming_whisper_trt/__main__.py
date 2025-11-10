@@ -7,25 +7,24 @@ This script initializes the Whisper TRT model, sets up the server, and handles c
 """
 
 # SDPA fix for Whisper 20240930 and newer per https://github.com/openai/whisper/discussions/2423
-from whisper.model import disable_sdpa
-
 import argparse
 import asyncio
 import logging
+import os
 import sys
 import time
-import os
 from functools import partial
 from pathlib import Path
-from typing import Optional, List
+from typing import List, Optional
 
+from whisper.model import disable_sdpa
 from wyoming.info import AsrModel, AsrProgram, Attribution, Info
 from wyoming.server import AsyncServer
 
+from whisper_trt import MODEL_FILENAMES, WhisperTRT, WhisperTRTBuilder, load_trt_model
+
 from . import __version__
 from .handler import WhisperTrtEventHandler
-
-from whisper_trt import load_trt_model, WhisperTRT, MODEL_FILENAMES, WhisperTRTBuilder
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
