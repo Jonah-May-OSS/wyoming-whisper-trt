@@ -12,7 +12,9 @@ jobs:
       - uses: actions/checkout@71cf2267d89c5cb81562390fa70a37fa40b1305e
       - uses: chartboost/ruff-action@e18ae971ccee1b2d7bbef113930f00c670b78da4
         with:
-          args: check --output-format=github wyoming_whisper_trt/ tests/
+          src: wyoming_whisper_trt/ tests/
+          args: check --output-format=github
       - uses: chartboost/ruff-action@e18ae971ccee1b2d7bbef113930f00c670b78da4
         with:
-          args: format --check wyoming_whisper_trt/ tests/
+          src: wyoming_whisper_trt/ tests/
+          args: format --check
