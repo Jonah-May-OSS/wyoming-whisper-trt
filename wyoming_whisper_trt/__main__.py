@@ -15,7 +15,7 @@ import sys
 import time
 from functools import partial
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 from whisper.model import disable_sdpa
 from wyoming.info import AsrModel, AsrProgram, Attribution, Info
@@ -34,7 +34,7 @@ class NanosecondFormatter(logging.Formatter):
     """Custom formatter to include nanoseconds in log timestamps."""
 
     def formatTime(
-        self, record: logging.LogRecord, datefmt: Optional[str] = None
+        self, record: logging.LogRecord, datefmt: str | None = None
     ) -> str:
         """Formats the time with nanosecond precision."""
         ct = record.created

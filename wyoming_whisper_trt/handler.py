@@ -4,7 +4,6 @@ import io
 import logging
 import time
 import wave
-from typing import Optional
 
 import numpy as np
 from wyoming.asr import (
@@ -30,7 +29,7 @@ class NanosecondFormatter(logging.Formatter):
     """Custom formatter to include nanoseconds in log timestamps."""
 
     def formatTime(
-        self, record: logging.LogRecord, datefmt: Optional[str] = None
+        self, record: logging.LogRecord, datefmt: str | None = None
     ) -> str:
         ct = record.created
         t = time.localtime(ct)
@@ -65,9 +64,9 @@ class WhisperTrtEventHandler(AsyncEventHandler):
         cli_args: argparse.Namespace,
         model: whisper_trt.WhisperTRT,
         model_lock: asyncio.Lock,
-        initial_prompt: Optional[str] = None,
+        initial_prompt: str | None = None,
         streaming: bool = False,
-        default_language: Optional[str] = None,
+        default_language: str | None = None,
         *args,
         **kwargs,
     ) -> None:
@@ -91,9 +90,9 @@ class WhisperTrtEventHandler(AsyncEventHandler):
         # WAV buffer for final flush
 
         self._wav_buffer = io.BytesIO()
-        self._wave_writer: Optional[wave.Wave_write] = None
-        self._sample_width: Optional[int] = None
-        self._channels: Optional[int] = None
+        self._wave_writer: wave.Wave_write | None = None
+        self._sample_width: int | None = None
+        self._channels: int | None = None
 
         # interim state
 
