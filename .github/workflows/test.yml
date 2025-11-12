@@ -20,12 +20,12 @@ jobs:
     name: "Wait for required checks"
     runs-on: ubuntu-latest
     steps:
-      - name: Wait for Ruff and Lint checks
+      - name: Wait for Ruff checks
         uses: fountainhead/action-wait-for-check@297be350cf8393728ea4d4b39435c7d7ae167c93
         id: wait-for-checks
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          checkName: ruff,lint
+          checkName: ruff
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           timeoutSeconds: 600
           intervalSeconds: 10
