@@ -28,9 +28,7 @@ logger.addHandler(logging.NullHandler())
 class NanosecondFormatter(logging.Formatter):
     """Custom formatter to include nanoseconds in log timestamps."""
 
-    def formatTime(
-        self, record: logging.LogRecord, datefmt: str | None = None
-    ) -> str:
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:
         ct = record.created
         t = time.localtime(ct)
         s = time.strftime("%Y-%m-%d %H:%M:%S", t)

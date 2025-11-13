@@ -15,7 +15,6 @@ import sys
 import time
 from functools import partial
 from pathlib import Path
-from typing import List
 
 from whisper.model import disable_sdpa
 from wyoming.info import AsrModel, AsrProgram, Attribution, Info
@@ -33,9 +32,7 @@ logger.addHandler(logging.NullHandler())
 class NanosecondFormatter(logging.Formatter):
     """Custom formatter to include nanoseconds in log timestamps."""
 
-    def formatTime(
-        self, record: logging.LogRecord, datefmt: str | None = None
-    ) -> str:
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:
         """Formats the time with nanosecond precision."""
         ct = record.created
         t = time.localtime(ct)
@@ -91,7 +88,7 @@ def is_language_specific(model_name: str) -> bool:
     return "." in model_name
 
 
-def extract_languages(model: WhisperTRT, model_name: str) -> List[str]:
+def extract_languages(model: WhisperTRT, model_name: str) -> list[str]:
     """
     Extracts supported languages from the Whisper TRT model.
 
@@ -100,7 +97,7 @@ def extract_languages(model: WhisperTRT, model_name: str) -> List[str]:
         model_name (str): The name of the model.
 
     Returns:
-        List[str]: A list of supported language codes.
+        list[str]: A list of supported language codes.
     """
     if is_language_specific(model_name):
         # For example, "small.en" -> "en"
@@ -130,13 +127,13 @@ def extract_languages(model: WhisperTRT, model_name: str) -> List[str]:
     return languages
 
 
-def build_wyoming_info(model_name: str, languages: List[str]) -> Info:
+def build_wyoming_info(model_name: str, languages: list[str]) -> Info:
     """
     Builds the Wyoming Info object with ASR model details.
 
     Args:
         model_name (str): The name of the ASR model.
-        languages (List[str]): Supported languages for the model.
+        languages (list[str]): Supported languages for the model.
 
     Returns:
         Info: The constructed Info object.

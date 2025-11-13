@@ -22,7 +22,7 @@ classifiers = [
 dynamic = ["version"]
 
 [project.urls]
-Homepage = "https://github.com/JonahMMay/wyoming-whisper-trt"
+Homepage = "https://github.com/Jonah-May-OSS/wyoming-whisper-trt"
 
 [project.scripts]
 wyoming-whisper-trt = "wyoming_whisper_trt.__main__:run"
@@ -75,16 +75,6 @@ select = [
 ]
 ignore = [
     "E501",   # line too long (handled by formatter)
-    "D100",   # Missing docstring in public module
-    "D101",   # Missing docstring in public class
-    "D102",   # Missing docstring in public method
-    "D103",   # Missing docstring in public function
-    "D104",   # Missing docstring in public package
-    "D105",   # Missing docstring in magic method
-    "D107",   # Missing docstring in __init__
-    "D200",   # One-line docstring should fit on one line
-    "D205",   # 1 blank line required between summary line and description
-    "D212",   # Multi-line docstring summary should start at the first line
     "PLR0913", # Too many arguments to function call
     "PLR2004", # Magic value used in comparison
     "N802",    # Function name should be lowercase
@@ -94,9 +84,6 @@ ignore = [
     "PTH",     # flake8-use-pathlib (gradual migration)
     "C901",    # Function is too complex (gradual improvement)
     "SIM115",  # Use context manager for opening files (gradual improvement)
-    "UP006",   # Use `list` instead of `List` (gradual migration)
-    "UP007",   # Use `X | Y` for type annotations (gradual migration)
-    "UP035",   # `typing.List` is deprecated (gradual migration)
 ]
 
 [tool.ruff.lint.per-file-ignores]

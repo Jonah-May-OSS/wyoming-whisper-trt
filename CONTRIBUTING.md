@@ -179,7 +179,6 @@ Ruff and isort will handle this automatically.
 The project uses GitHub Actions for continuous integration:
 
 - **Ruff**: Runs linting and format checks on all PRs
-- **Black**: Runs code formatting checks on all PRs
 - **Tests**: Runs the full test suite (on self-hosted runners with GPU)
 
 All checks must pass before a PR can be merged.
