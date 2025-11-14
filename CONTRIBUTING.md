@@ -2,6 +2,17 @@
 
 Thank you for your interest in contributing to Wyoming Whisper TRT! This document provides guidelines and instructions for development.
 
+## Working with GitHub Copilot
+
+This repository is configured to work with [GitHub Copilot coding agent](https://docs.github.com/en/copilot/tutorials/coding-agent). If you're using Copilot, it will automatically reference the instructions in `.github/copilot-instructions.md` to understand:
+
+- Project structure and conventions
+- Build, test, and validation procedures
+- Coding standards and best practices
+- Common development tasks and workflows
+
+These instructions help Copilot make more informed and contextually appropriate contributions. Even if you're not using Copilot, the instructions file serves as a comprehensive reference for working effectively with this codebase.
+
 ## Development Setup
 
 ### Prerequisites
