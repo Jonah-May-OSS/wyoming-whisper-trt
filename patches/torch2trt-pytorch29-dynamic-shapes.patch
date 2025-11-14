@@ -1,56 +1,26 @@
 diff --git a/torch2trt/torch2trt.py b/torch2trt/torch2trt.py
-index cba0b39..78a21b8 100644
+index cba0b39..d8f4e2b 100644
 --- a/torch2trt/torch2trt.py
 +++ b/torch2trt/torch2trt.py
-@@ -604,17 +604,48 @@ def torch2trt(module,
+@@ -604,6 +604,10 @@ def torch2trt(module,
          # Export, optimize, and parse ONNX via a temp directory (auto-cleaned)
          with tempfile.TemporaryDirectory() as tmpdir:
              tmp_in_path = os.path.join(tmpdir, "model_in.onnx")
 +            
-+            # Check PyTorch version for dynamic_axes vs dynamic_shapes
++            # Check PyTorch version to use legacy ONNX exporter for 2.9+
 +            torch_version = tuple(int(x) for x in torch.__version__.split('+')[0].split('.')[:2])
 +            
              export_args = dict(
                  model=module_flat,
                  args=inputs_flat,
-                 f=tmp_in_path,
-                 input_names=input_names,
-                 output_names=output_names,
--                dynamic_axes={
-+            )
-+            
-+            # PyTorch 2.9+ requires dynamic_shapes instead of dynamic_axes
-+            if torch_version >= (2, 9):
-+                # For PyTorch 2.9+, use dynamic_shapes with Dim objects
-+                # Create dynamic_shapes dict with torch.export.Dim for dynamic dimensions
-+                from torch.export import Dim
-+                
-+                dynamic_shapes = {}
-+                for index, name in enumerate(input_names):
-+                    if index < len(dynamic_axes_flat) and len(dynamic_axes_flat[index]) > 0:
-+                        # Create a shape spec for this input
-+                        input_shape = inputs_flat[index].shape
-+                        shape_spec = {}
-+                        for axis in dynamic_axes_flat[index]:
-+                            # Create a Dim object for each dynamic axis
-+                            dim_name = f"input_{index}_axis_{axis}"
-+                            # Get min/max from the shapes
-+                            min_val = min_shapes_flat[index][axis] if index < len(min_shapes_flat) else 1
-+                            max_val = max_shapes_flat[index][axis] if index < len(max_shapes_flat) else input_shape[axis]
-+                            shape_spec[axis] = Dim(dim_name, min=min_val, max=max_val)
-+                        dynamic_shapes[name] = shape_spec
-+                
-+                if dynamic_shapes:
-+                    export_args["dynamic_shapes"] = dynamic_shapes
-+            else:
-+                # For older PyTorch versions, use dynamic_axes
-+                export_args["dynamic_axes"] = {
-                     name: {int(axis): f"input_{index}_axis_{axis}" for axis in dynamic_axes_flat[index]}
+@@ -615,6 +619,10 @@ def torch2trt(module,
                      for index, name in enumerate(input_names)
--                },
--            )
-+                }
+                 },
+             )
 +            
++            # Force legacy ONNX exporter for PyTorch 2.9+ to avoid torch.export issues
++            if torch_version >= (2, 9):
++                export_args["dynamo"] = False
              if onnx_opset is not None:
                  export_args["opset_version"] = onnx_opset
              torch.onnx.export(**export_args)
