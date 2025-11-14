@@ -1,0 +1,26 @@
+diff --git a/torch2trt/torch2trt.py b/torch2trt/torch2trt.py
+index cba0b39..d8f4e2b 100644
+--- a/torch2trt/torch2trt.py
++++ b/torch2trt/torch2trt.py
+@@ -604,6 +604,10 @@ def torch2trt(module,
+         # Export, optimize, and parse ONNX via a temp directory (auto-cleaned)
+         with tempfile.TemporaryDirectory() as tmpdir:
+             tmp_in_path = os.path.join(tmpdir, "model_in.onnx")
++            
++            # Check PyTorch version to use legacy ONNX exporter for 2.9+
++            torch_version = tuple(int(x) for x in torch.__version__.split('+')[0].split('.')[:2])
++            
+             export_args = dict(
+                 model=module_flat,
+                 args=inputs_flat,
+@@ -615,6 +619,10 @@ def torch2trt(module,
+                     for index, name in enumerate(input_names)
+                 },
+             )
++            
++            # Force legacy ONNX exporter for PyTorch 2.9+ to avoid torch.export issues
++            if torch_version >= (2, 9):
++                export_args["dynamo"] = False
+             if onnx_opset is not None:
+                 export_args["opset_version"] = onnx_opset
+             torch.onnx.export(**export_args)

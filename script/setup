@@ -33,6 +33,32 @@ if args.dev:
         pip + ["install", "-r", str(_PROGRAM_DIR / "requirements_dev.txt")]
     )
 
+# Apply patches to torch2trt for PyTorch 2.9+ compatibility
+patches_dir = _PROGRAM_DIR / "patches"
+if patches_dir.exists():
+    patch_file = patches_dir / "torch2trt-pytorch29-dynamic-shapes.patch"
+    if patch_file.exists():
+        print(f"Applying patch: {patch_file}")
+        try:
+            # Check if patch is already applied by testing if it applies cleanly in reverse
+            result = subprocess.run(
+                ["git", "apply", "--check", "--reverse", str(patch_file)],
+                cwd=_TORCH2TRT_DIR,
+                capture_output=True
+            )
+            if result.returncode == 0:
+                print("Patch already applied, skipping...")
+            else:
+                # Patch not applied, apply it now
+                subprocess.check_call(
+                    ["git", "apply", str(patch_file)],
+                    cwd=_TORCH2TRT_DIR
+                )
+                print("Patch applied successfully")
+        except subprocess.CalledProcessError as e:
+            print(f"Warning: Failed to apply patch: {e}")
+            print("Continuing with installation...")
+
 # Install torch2trt
 os.chdir(_TORCH2TRT_DIR)
 subprocess.check_call([context.env_exe, "setup.py", "install"])
