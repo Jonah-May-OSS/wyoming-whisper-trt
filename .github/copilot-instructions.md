@@ -1,8 +1,44 @@
-# Wyoming Whisper TRT
+# Wyoming Whisper TRT - Copilot Instructions
+
+This file provides guidance for GitHub Copilot coding agent when working on this repository. These instructions help ensure high-quality contributions that align with project standards and practices.
+
+## Project Overview
 
 Wyoming Whisper TRT is a Python-based speech recognition server that optimizes OpenAI Whisper with NVIDIA TensorRT for Home Assistant integration via the Wyoming Protocol. This provides significantly faster inference (~3x faster) while using less memory (~60% less) compared to standard PyTorch Whisper.
 
-Always reference these instructions first and fallback to search or bash commands only when you encounter unexpected information that does not match the info here.
+**Important**: Always reference these instructions first and fallback to search or bash commands only when you encounter unexpected information that does not match the info here.
+
+## Task Suitability and Delegation
+
+### Suitable Tasks for Copilot Agent
+
+This repository is well-suited for Copilot agent assistance on:
+- **Bug fixes**: Fixing identified bugs in Python code, Docker configurations, or tests
+- **Documentation updates**: Improving README, CONTRIBUTING, or inline documentation
+- **Test coverage**: Adding or updating tests for existing functionality
+- **Code refactoring**: Improving code structure while maintaining functionality
+- **Feature additions**: Implementing well-defined, small to medium features
+- **Dependency updates**: Updating package versions in requirements.txt
+- **CI/CD improvements**: Enhancing GitHub Actions workflows
+
+### Tasks Requiring Human Review
+
+The following tasks require extra caution and human oversight:
+- **Security-related changes**: Authentication, authorization, or secrets management
+- **TensorRT model changes**: Core optimization logic that affects performance
+- **CUDA/GPU integration**: Low-level GPU code that requires hardware testing
+- **Breaking API changes**: Changes that affect Wyoming Protocol compatibility
+- **Production configuration**: Changes to Docker images or deployment configs
+
+### Task Expectations
+
+When assigned a task:
+1. Read the issue description carefully for context and acceptance criteria
+2. Identify the minimal set of files that need modification
+3. Make focused, surgical changes - avoid unnecessary refactoring
+4. Follow existing code patterns and conventions
+5. Test changes thoroughly before marking as complete
+6. Update related documentation if API or behavior changes
 
 ## Working Effectively
 
@@ -157,6 +193,102 @@ These commands help verify the codebase integrity before committing to long buil
    ```
    - Validates complete Wyoming Protocol workflow including model loading, audio processing, and transcription.
 
+## Coding Standards and Conventions
+
+### Code Style and Formatting
+
+This project uses modern Python development tools to maintain consistent code quality:
+
+**Linters and Formatters:**
+- **Ruff**: Fast, Rust-based linter and formatter (primary tool)
+- **Black**: Code formatter with 88-character line length
+- **isort**: Import sorting (standard library → third-party → local)
+- **mypy**: Static type checking
+- **flake8**: Additional style checking (legacy)
+
+**Type Hints:**
+- Use type hints for all function parameters and return values
+- Use `from typing import` for complex types
+- Prefer modern Python 3.12+ type syntax when possible
+
+**Docstrings:**
+- Use Google-style docstrings for public modules, classes, and functions
+- Include descriptions, parameters, return values, and exceptions
+- Be descriptive but concise
+
+**Import Organization:**
+```python
+# Standard library imports
+import os
+import sys
+
+# Third-party library imports
+import numpy as np
+import torch
+
+# Local application imports
+from wyoming_whisper_trt import handler
+```
+
+**Code Quality Requirements:**
+- Maximum line length: 88 characters (enforced by Black/Ruff)
+- All code must pass `python script/lint` before committing
+- All code must be formatted with `python script/format`
+- Write tests for new features (see `tests/` directory for examples)
+
+### Pull Request and Contribution Workflow
+
+When making changes to this repository:
+
+1. **Before Starting:**
+   - Read issue requirements carefully
+   - Understand the scope and acceptance criteria
+   - Identify files that need modification
+
+2. **During Development:**
+   - Make minimal, focused changes
+   - Follow existing code patterns and conventions
+   - Run `python script/format` to auto-format code
+   - Run `python script/lint` frequently to catch issues early
+   - Write or update tests for changed functionality
+
+3. **Before Committing:**
+   ```bash
+   # Required pre-commit checks
+   python script/format  # Auto-format (10-30 seconds)
+   python script/lint    # Lint check (1-3 minutes, set 10+ min timeout)
+   python script/test    # Run tests (10-15 minutes, set 30+ min timeout)
+   ```
+
+4. **Pull Request Guidelines:**
+   - Write clear, descriptive commit messages
+   - Reference related issues in the PR description
+   - Explain what changed and why
+   - Ensure all CI checks pass before requesting review
+   - Respond to review feedback promptly
+
+### Testing Guidelines
+
+**Test Requirements:**
+- Place tests in the `tests/` directory
+- Name test files with `test_` prefix (e.g., `test_handler.py`)
+- Name test functions with `test_` prefix
+- Use pytest fixtures for common setup
+- Use `@pytest.mark.asyncio` for async tests
+
+**Running Tests:**
+```bash
+# Run all tests
+python script/test
+
+# Run specific test file
+source .venv/bin/activate
+pytest tests/test_faster_whisper.py -v
+
+# Run specific test function
+pytest tests/test_faster_whisper.py::test_faster_whisper -v
+```
+
 ## Build Timing and Expectations
 
 - **Git submodule init**: 1-2 minutes
@@ -297,3 +429,53 @@ services:
 ```
 
 Always use the provided Docker images for production deployments as they handle all CUDA and TensorRT dependencies correctly.
+
+## Copilot Agent Best Practices
+
+### Working with This Repository
+
+**Communication:**
+- If stuck or uncertain, ask for clarification rather than making assumptions
+- Explain your approach before making significant changes
+- Document complex decisions in code comments or commit messages
+
+**Iterative Development:**
+- Make small, incremental changes rather than large refactors
+- Test each change before moving to the next
+- Use `report_progress` to share updates on long-running tasks
+
+**Quality Assurance:**
+- Always run formatters and linters before finalizing changes
+- Ensure all tests pass, including new tests for new features
+- Verify that changes don't break existing functionality
+- Check that Docker configurations remain valid
+
+**When in Doubt:**
+- Refer to `CONTRIBUTING.md` for detailed development guidelines
+- Check existing code for patterns and conventions
+- Review test files for examples of testing approaches
+- Consult the official documentation for dependencies (PyTorch, TensorRT, Wyoming)
+
+### Common Issues and Solutions
+
+**Network Timeout During Setup:**
+- This is a known issue in restricted environments
+- Solution: Use Docker builds or pre-built images
+- See "Network Dependencies and Known Issues" section above
+
+**CUDA/GPU Not Detected:**
+- Verify NVIDIA drivers are installed
+- Check NVIDIA Container Toolkit configuration
+- Use `--device cpu` flag for development without GPU
+
+**Test Failures:**
+- Ensure all dependencies are installed (`python script/setup --dev`)
+- Check that git submodules are initialized
+- Verify model downloads completed successfully
+- Review test logs for specific error messages
+
+**Build Takes Too Long:**
+- Expected: First build takes 45-90 minutes
+- Don't cancel long-running operations
+- Use appropriate timeouts as documented above
+- Consider using pre-built Docker images for faster iteration
