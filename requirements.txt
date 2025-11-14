@@ -2,9 +2,9 @@
 wyoming==1.8.0
 openai-whisper==20250625
 psutil~=7.1.0
-tensorrt_cu12_bindings~=10.13.3 
-tensorrt_cu12_libs~=10.13.3
-tensorrt~=10.13.3
+tensorrt_cu12_bindings~=10.14.1 
+tensorrt_cu12_libs~=10.14.1
+tensorrt~=10.14.1
 packaging~=25.0
 onnx-graphsurgeon==0.5.8
 --extra-index-url https://download.pytorch.org/whl/cu128
