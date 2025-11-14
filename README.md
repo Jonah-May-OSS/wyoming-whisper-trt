@@ -210,6 +210,43 @@ docker run \
 2. Browse to the repository root folder
 3. Run ``docker compose -f docker-compose-github-igpu.yaml up -d``
 
+## Development
+
+For development setup, testing, and contribution guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+### Quick Start for Developers
+
+```bash
+# Clone with submodules
+git clone --recursive https://github.com/Jonah-May-OSS/wyoming-whisper-trt.git
+cd wyoming-whisper-trt
+
+# Setup development environment
+python script/setup --dev
+
+# Format code
+python script/format
+
+# Run linting checks (includes ruff, black, isort, mypy)
+python script/lint
+
+# Run tests
+python script/test
+```
+
+### Testing and Linting Tools
+
+This project uses modern Python development tools:
+
+- **[Ruff](https://github.com/astral-sh/ruff)**: Fast linting and formatting (10-100x faster than traditional tools)
+- **pytest**: Testing framework with asyncio support
+- **black**: Code formatter
+- **isort**: Import sorting
+- **mypy**: Static type checking
+
+All configuration is in `pyproject.toml`. See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed information.
+
 ## See also:
 - [torch2trt](https://github.com/NVIDIA-AI-IOT/torch2trt) - Used to convert PyTorch model to TensorRT and perform inference.
 - [NanoLLM](https://github.com/dusty-nv/NanoLLM) - Large Language Models targeting NVIDIA Jetson.  Perfect for combining with ASR!
+

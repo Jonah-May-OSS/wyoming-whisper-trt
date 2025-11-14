@@ -15,9 +15,29 @@ on:
       - 'renovate.json'
 
 jobs:
+  # Add a dependency job that waits for required checks
+  wait_for_checks:
+    name: "Wait for required checks"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for Ruff checks
+        uses: fountainhead/action-wait-for-check@297be350cf8393728ea4d4b39435c7d7ae167c93
+        id: wait-for-checks
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          checkName: ruff
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          timeoutSeconds: 600
+          intervalSeconds: 10
+      
+      - name: Fail if checks did not succeed
+        if: steps.wait-for-checks.outputs.conclusion != 'success'
+        run: exit 1
+
   test_linux:
     name: "Build and Test on Linux (self-hosted runner)"
     runs-on: self-hosted
+    needs: wait_for_checks
     steps:
       # 1. Checkout the repository code
       - name: Checkout Code
@@ -62,12 +82,6 @@ jobs:
         uses: Jimver/cuda-toolkit@6008063726ffe3309d1b22e413d9e88fed91a2f2
         with:
           use-github-cache: false
-
-      - name: Add CUDA 12.9 bin to PATH
-        run: echo "/usr/local/cuda-12.9/bin" >> $GITHUB_PATH
-
-      - name: Add CUDA 12.9 lib to LD_LIBRARY_PATH
-        run: echo "LD_LIBRARY_PATH=/usr/local/cuda-12.9/lib64:$LD_LIBRARY_PATH" >> $GITHUB_ENV
 
       # 6. Create and activate virtual environment
       - name: Setup Virtual Environment
