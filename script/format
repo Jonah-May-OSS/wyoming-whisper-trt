@@ -12,5 +12,11 @@ _TESTS_DIR = _PROGRAM_DIR / "tests"
 _FORMAT_DIRS = [_MODULE_DIR, _TESTS_DIR]
 
 context = venv.EnvBuilder().ensure_directories(_VENV_DIR)
+
+# Run ruff for fast auto-fixes and formatting
+subprocess.check_call([context.env_exe, "-m", "ruff", "check", "--fix"] + _FORMAT_DIRS)
+subprocess.check_call([context.env_exe, "-m", "ruff", "format"] + _FORMAT_DIRS)
+
+# Run traditional formatters
 subprocess.check_call([context.env_exe, "-m", "black"] + _FORMAT_DIRS)
 subprocess.check_call([context.env_exe, "-m", "isort"] + _FORMAT_DIRS)

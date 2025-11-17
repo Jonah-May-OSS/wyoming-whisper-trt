@@ -7,25 +7,23 @@ This script initializes the Whisper TRT model, sets up the server, and handles c
 """
 
 # SDPA fix for Whisper 20240930 and newer per https://github.com/openai/whisper/discussions/2423
-from whisper.model import disable_sdpa
-
 import argparse
 import asyncio
 import logging
+import os
 import sys
 import time
-import os
 from functools import partial
 from pathlib import Path
-from typing import Optional, List
 
+from whisper.model import disable_sdpa
 from wyoming.info import AsrModel, AsrProgram, Attribution, Info
 from wyoming.server import AsyncServer
 
+from whisper_trt import MODEL_FILENAMES, WhisperTRT, WhisperTRTBuilder, load_trt_model
+
 from . import __version__
 from .handler import WhisperTrtEventHandler
-
-from whisper_trt import load_trt_model, WhisperTRT, MODEL_FILENAMES, WhisperTRTBuilder
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -34,9 +32,7 @@ logger.addHandler(logging.NullHandler())
 class NanosecondFormatter(logging.Formatter):
     """Custom formatter to include nanoseconds in log timestamps."""
 
-    def formatTime(
-        self, record: logging.LogRecord, datefmt: Optional[str] = None
-    ) -> str:
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:
         """Formats the time with nanosecond precision."""
         ct = record.created
         t = time.localtime(ct)
@@ -92,7 +88,7 @@ def is_language_specific(model_name: str) -> bool:
     return "." in model_name
 
 
-def extract_languages(model: WhisperTRT, model_name: str) -> List[str]:
+def extract_languages(model: WhisperTRT, model_name: str) -> list[str]:
     """
     Extracts supported languages from the Whisper TRT model.
 
@@ -101,7 +97,7 @@ def extract_languages(model: WhisperTRT, model_name: str) -> List[str]:
         model_name (str): The name of the model.
 
     Returns:
-        List[str]: A list of supported language codes.
+        list[str]: A list of supported language codes.
     """
     if is_language_specific(model_name):
         # For example, "small.en" -> "en"
@@ -131,13 +127,13 @@ def extract_languages(model: WhisperTRT, model_name: str) -> List[str]:
     return languages
 
 
-def build_wyoming_info(model_name: str, languages: List[str]) -> Info:
+def build_wyoming_info(model_name: str, languages: list[str]) -> Info:
     """
     Builds the Wyoming Info object with ASR model details.
 
     Args:
         model_name (str): The name of the ASR model.
-        languages (List[str]): Supported languages for the model.
+        languages (list[str]): Supported languages for the model.
 
     Returns:
         Info: The constructed Info object.
