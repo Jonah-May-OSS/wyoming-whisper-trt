@@ -214,6 +214,8 @@ docker run \
 
 For development setup, testing, and contribution guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
+This repository includes comprehensive [Copilot instructions](.github/copilot-instructions.md) to help GitHub Copilot coding agent (and human developers) work effectively with the codebase.
+
 ### Quick Start for Developers
 
 ```bash
