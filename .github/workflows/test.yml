@@ -48,13 +48,15 @@ jobs:
 
       - name: Commit Ruff Fixes
         if: always()
+        env:
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           if ! git diff --quiet; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add -u
             git commit -m "chore(ci): auto-fix ruff formatting + imports"
-            git push origin HEAD:${{ github.head_ref }}
+            git push origin HEAD:$HEAD_REF
           fi
 
       - name: Run Ruff Formatter Check
