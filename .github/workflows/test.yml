@@ -103,7 +103,7 @@ jobs:
   test_linux:
     name: "Build and Test on Linux (self-hosted runner)"
     runs-on: self-hosted
-    needs: wait_for_checks
+    needs: test-and-lint
     steps:
       # 1. Checkout the repository code
       - name: Checkout Code
