@@ -28,6 +28,7 @@ from .handler import WhisperTrtEventHandler
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
+
 class NanosecondFormatter(logging.Formatter):
     """Custom formatter to include nanoseconds in log timestamps."""
 
