@@ -43,9 +43,11 @@ addopts = [
     "--strict-markers",
     "--strict-config",
     "--tb=short",
+    "-m", "not manual",
 ]
 markers = [
     "asyncio: mark test as an asyncio test",
+    "manual: mark test as manual (excluded by default, run with -m manual)",
 ]
 
 [tool.ruff]
