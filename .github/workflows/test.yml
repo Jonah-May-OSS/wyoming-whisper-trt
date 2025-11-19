@@ -10,7 +10,6 @@ on:
       - '.github/**'
       - '.vscode/**'
       - 'examples/**'
-      - 'tests/**'
       - '**/*.md'
       - 'renovate.json'
 
@@ -18,7 +17,6 @@ jobs:
   test-and-lint:
     name: "Run pytest and ruff"
     runs-on: self-hosted
-    
     steps:
       - name: Checkout Code
         uses: actions/checkout@v5
@@ -46,9 +44,6 @@ jobs:
       - name: Run Ruff Formatter (Auto-Fix)
         run: ruff format .
 
-      - name: Run Ruff Formatter Check
-        run: ruff format --check .
-
       - name: Commit Ruff Fixes
         if: success()
         env:
@@ -64,18 +59,17 @@ jobs:
 
       - name: Run Pytest
         run: pytest --verbose --cov=wyoming_whisper_trt --cov-report=term --cov-report=xml
-        continue-on-error: true
 
       - name: Upload coverage.xml as artifact
         uses: actions/upload-artifact@v4
-        if: success() || failure()
+        if: success()
         with:
           name: coverage-report
           path: coverage.xml
 
       - name: Post Coverage Summary to PR
         uses: actions/github-script@v7
-        if: success() || failure()
+        if: success()
         with:
           script: |
             const fs = require('fs');
