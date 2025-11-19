@@ -37,6 +37,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements_dev.txt
+          pip install -e .
 
       - name: Run Ruff Linter (Auto-Fix Imports)
         run: ruff check --fix --select I --unsafe-fixes --output-format=github .
