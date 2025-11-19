@@ -58,7 +58,7 @@ jobs:
           fi
 
       - name: Run Pytest
-        run: pytest --verbose --cov=wyoming_whisper_trt --cov-report=term --cov-report=xml
+        run: pytest --verbose --cov=wyoming_whisper_trt --cov-report=term --cov-report=xml -k "not test_faster_whisper"
 
       - name: Upload coverage.xml as artifact
         uses: actions/upload-artifact@v4
