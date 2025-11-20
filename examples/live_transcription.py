@@ -20,31 +20,30 @@
 # DEALINGS IN THE SOFTWARE.
 
 
-import numpy as np
 import time
-import pyaudio
-from multiprocessing import Process, Queue, Event
 from collections import deque
-from dataclasses import dataclass
 from contextlib import contextmanager
+from dataclasses import dataclass
+from multiprocessing import Event, Process, Queue
 from typing import Optional
+
+import numpy as np
+import pyaudio
 from whisper_trt.vad import load_vad
+
 from whisper_trt.model import load_trt_model
 
 
 def find_respeaker_audio_device_index():
-
     p = pyaudio.PyAudio()
 
     info = p.get_host_api_info_by_index(0)
     num_devices = info.get("deviceCount")
 
     for i in range(num_devices):
-
         device_info = p.get_device_info_by_host_api_device_index(0, i)
 
         if "respeaker" in device_info.get("name").lower():
-
             device_index = i
     return device_index
 
@@ -56,7 +55,6 @@ def get_respeaker_audio_stream(
     channels: int = 6,
     bitwidth: int = 2,
 ):
-
     if device_index is None:
         device_index = find_respeaker_audio_device_index()
     if device_index is None:
@@ -107,7 +105,6 @@ class AudioSegment:
 
 
 class Microphone(Process):
-
     def __init__(
         self,
         output_queue: Queue,
@@ -152,7 +149,6 @@ class Microphone(Process):
 
 
 class VAD(Process):
-
     def __init__(
         self,
         input_queue: Queue,
@@ -177,7 +173,6 @@ class VAD(Process):
         self.speech_end_flag = speech_end_flag
 
     def run(self):
-
         vad = load_vad()
 
         # warmup run
@@ -193,7 +188,6 @@ class VAD(Process):
         if self.ready_flag is not None:
             self.ready_flag.set()
         while True:
-
             audio_chunk = self.input_queue.get()
 
             voice_prob = float(
@@ -238,7 +232,6 @@ class VAD(Process):
 
 
 class ASR(Process):
-
     def __init__(
         self,
         model: str,
@@ -255,7 +248,6 @@ class ASR(Process):
         self.backend = backend
 
     def run(self):
-
         if self.backend == "whisper_trt":
             from whisper_trt import load_trt_model
 
@@ -284,7 +276,6 @@ class ASR(Process):
         if self.ready_flag is not None:
             self.ready_flag.set()
         while True:
-
             speech_segment = self.input_queue.get()
 
             t0 = time.perf_counter_ns()
@@ -304,7 +295,6 @@ class ASR(Process):
 
 
 class StartEndMonitor(Process):
-
     def __init__(self, start_flag: Event, end_flag):
         super().__init__()
         self.start_flag = start_flag
@@ -321,7 +311,6 @@ class StartEndMonitor(Process):
 
 
 if __name__ == "__main__":
-
     import argparse
 
     parser = argparse.ArgumentParser()

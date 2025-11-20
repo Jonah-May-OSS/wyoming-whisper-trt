@@ -20,17 +20,18 @@
 # DEALINGS IN THE SOFTWARE.
 
 
-import torch
-import os
 import argparse
+import os
+
+import torch
+
 from whisper_trt import load_trt_model
 
-
 if __name__ == "__main__":
-
     import time
-    import psutil
     from multiprocessing import Process
+
+    import psutil
 
     parser = argparse.ArgumentParser()
     parser.add_argument("model", type=str, choices=["tiny.en", "base.en", "small.en"])
@@ -49,7 +50,6 @@ if __name__ == "__main__":
         return mem_info.rss
 
     def profile_model(model, audio, iters: int = 1, is_faster_whisper: bool = False):
-
         result = model.transcribe(audio)
 
         if is_faster_whisper:

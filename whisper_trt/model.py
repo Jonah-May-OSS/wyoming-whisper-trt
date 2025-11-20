@@ -20,27 +20,26 @@
 # DEALINGS IN THE SOFTWARE.
 
 
+import logging
 import os
 import time
-from typing import Optional, Dict, Any, List
-
-import torch
-import torch.nn.functional as F
-import numpy as np
-import torch.nn as nn
-import torch2trt
-import tensorrt
-
-from whisper import load_model
-from whisper.model import LayerNorm, Tensor, ModelDimensions
-from whisper.tokenizer import Tokenizer, TO_LANGUAGE_CODE
-import whisper.audio
 from dataclasses import asdict
+from typing import Any, Dict, List, Optional
 
-from .cache import get_cache_dir, make_cache_dir
+import numpy as np
+import tensorrt
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import whisper.audio
+from whisper import load_model
+from whisper.model import LayerNorm, ModelDimensions, Tensor
+from whisper.tokenizer import TO_LANGUAGE_CODE, Tokenizer
+
+import torch2trt
+
 from .__version__ import __version__
-
-import logging
+from .cache import get_cache_dir, make_cache_dir
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())

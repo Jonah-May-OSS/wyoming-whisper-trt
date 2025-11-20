@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "wyoming-whisper-trt"
 description = "Wyoming Server for Whisper powered by TensorRT"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 license = {text = "MIT"}
 authors = [
     {name = "Jonah May", email = "jonah@mayfamily.me"}
@@ -46,11 +46,12 @@ addopts = [
 ]
 markers = [
     "asyncio: mark test as an asyncio test",
+    "manual: mark test as manual (excluded by default, run with -m manual)",
 ]
 
 [tool.ruff]
 line-length = 88
-target-version = "py312"
+target-version = "py313"
 exclude = [
     ".git",
     ".venv",
@@ -104,7 +105,7 @@ line-ending = "auto"
 
 [tool.black]
 line-length = 88
-target-version = ['py312']
+target-version = ['py313']
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -131,7 +132,7 @@ use_parentheses = true
 indent = 4
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.13"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
