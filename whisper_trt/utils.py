@@ -1,8 +1,8 @@
 import hashlib
+import logging
 from pathlib import Path
 from typing import Optional
 
-import logging
 import requests
 from requests.adapters import HTTPAdapter, Retry
 from tqdm import tqdm

@@ -23,6 +23,7 @@ _SAMPLES_PER_CHUNK = 1024
 _TRANSCRIBE_TIMEOUT = 60
 
 
+@pytest.mark.manual
 @pytest.mark.asyncio
 async def test_faster_whisper() -> None:
     proc = await asyncio.create_subprocess_exec(

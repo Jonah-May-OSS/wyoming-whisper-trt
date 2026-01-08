@@ -20,14 +20,14 @@
 # DEALINGS IN THE SOFTWARE.
 
 
-import torch
-import os
 import argparse
+import os
+
+import torch
+
 from whisper_trt import load_trt_model
 
-
 if __name__ == "__main__":
-
     parser = argparse.ArgumentParser()
     parser.add_argument("model", type=str, choices=["tiny.en", "base.en", "small.en"])
     parser.add_argument("audio", type=str)
@@ -40,21 +40,18 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.backend == "whisper":
-
         from whisper import load_model
 
         model = load_model(args.model)
 
         result = model.transcribe(args.audio)
     elif args.backend == "whisper_trt":
-
         from whisper_trt import load_trt_model
 
         model = load_trt_model(args.model)
 
         result = model.transcribe(args.audio)
     elif args.backend == "faster_whisper":
-
         from faster_whisper import WhisperModel
 
         model = WhisperModel(args.model)
