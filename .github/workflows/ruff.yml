@@ -9,7 +9,7 @@ jobs:
   ruff:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@c2d88d3ecc89a9ef08eebf45d9637801dcee7eb5
+      - uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
       - uses: chartboost/ruff-action@1ec810db51b3ebdd902c812e962d2f7aafe85fcf
         with:
           src: wyoming_whisper_trt/ tests/

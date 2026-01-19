@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@c2d88d3ecc89a9ef08eebf45d9637801dcee7eb5
+        uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
         with:
           fetch-depth: 0
 
@@ -25,12 +25,12 @@ jobs:
         run: zip -x '*.git*' -r release.zip .
 
       - name: Install GitReleaseManager
-        uses: gittools/actions/gitreleasemanager/setup@80e9b2af4eddbd09bcce3d6b74f00a7602579ddf
+        uses: gittools/actions/gitreleasemanager/setup@0ed4c09d7ec1ce8653aa73c2a1c302eafa92d8fc
         with:
           versionSpec: '0.20.x'
 
       - name: Create release with GitReleaseManager
-        uses: gittools/actions/gitreleasemanager/create@80e9b2af4eddbd09bcce3d6b74f00a7602579ddf
+        uses: gittools/actions/gitreleasemanager/create@0ed4c09d7ec1ce8653aa73c2a1c302eafa92d8fc
         with:
           token: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
           repository: ${{ github.repository }}
@@ -40,14 +40,14 @@ jobs:
             release.zip
 
       - name: Publish release with GitReleaseManager
-        uses: gittools/actions/gitreleasemanager/publish@80e9b2af4eddbd09bcce3d6b74f00a7602579ddf
+        uses: gittools/actions/gitreleasemanager/publish@0ed4c09d7ec1ce8653aa73c2a1c302eafa92d8fc
         with:
           token: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
           repository: ${{ github.repository }}
           milestone: ${{ env.VERSION }}
 
       - name: Close release with GitReleaseManager
-        uses: gittools/actions/gitreleasemanager/close@80e9b2af4eddbd09bcce3d6b74f00a7602579ddf
+        uses: gittools/actions/gitreleasemanager/close@0ed4c09d7ec1ce8653aa73c2a1c302eafa92d8fc
         with:
           token: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
           repository: ${{ github.repository }}
