@@ -96,7 +96,8 @@ class AudioEncoderTRT(nn.Module):
     @torch.no_grad()
     def forward(self, x: Tensor) -> Tensor:
         n_audio_ctx = int(x.shape[2] // 2)
-        pos_embed = self.positional_embedding[-n_audio_ctx:, :]
+        pos_start = self.positional_embedding.shape[0] - n_audio_ctx
+        pos_embed = self.positional_embedding[pos_start:, :].to(x.device, dtype=x.dtype)
         x = self.engine(x, pos_embed)
         return x
 
@@ -145,13 +146,17 @@ class TextDecoderTRT(nn.Module):
     @torch.no_grad()
     def forward(self, x: Tensor, xa: Tensor) -> Tensor:
         offset = 0
-        token_emb = self.token_embedding(x).to(xa.device)
-        pos_emb = self.positional_embedding[offset : offset + x.shape[-1]].to(xa.device)
+        token_emb = self.token_embedding(x)
+        if token_emb.device != xa.device or token_emb.dtype != xa.dtype:
+            token_emb = token_emb.to(xa.device, dtype=xa.dtype)
+        pos_emb = self.positional_embedding[offset : offset + x.shape[-1]]
+        if pos_emb.device != xa.device or pos_emb.dtype != xa.dtype:
+            pos_emb = pos_emb.to(xa.device, dtype=xa.dtype)
         x = token_emb + pos_emb
         mask = self.mask.to(xa.device)
         x = self.engine(x, xa, mask)
         x = self.ln(x)
-        weight = self.token_embedding.weight.to(x.device)
+        weight = self.token_embedding.weight.to(x.device, dtype=x.dtype)
         logits = (x @ torch.transpose(weight, 0, 1)).float()
         return logits
 
@@ -289,11 +294,13 @@ class WhisperTRT(nn.Module):
 
             if initial_prompt:
                 prompt_ids = self.tokenizer.encode(initial_prompt)
-                n = len(prompt_ids)
-                out_tokens[0, cur_len : cur_len + n] = torch.tensor(
-                    prompt_ids, device=audio_features.device
-                )
-                cur_len += n
+                available = max_len - cur_len
+                if available > 0:
+                    k = min(len(prompt_ids), available)
+                    out_tokens[0, cur_len : cur_len + k] = torch.tensor(
+                        prompt_ids[:k], device=audio_features.device
+                    )
+                    cur_len += k
             # Prefix length for decoding (SOT + lang/task/notimestamps + initial prompt)
 
             prompt_len = cur_len
@@ -369,6 +376,9 @@ class WhisperTRT(nn.Module):
 # BUILDER CLASSES FOR MULTILINGUAL AND ENGLISH-ONLY MODELS
 # -----------------------------------------------------------------------------
 
+# Models that require increased workspace memory to avoid segmentation faults
+LARGE_MODELS = frozenset({"large", "large-v2", "large-v3", "large-v3-turbo"})
+
 
 class WhisperTRTBuilder:
     model: str
@@ -379,22 +389,108 @@ class WhisperTRTBuilder:
     _dims: Optional[ModelDimensions] = None
 
     @classmethod
+    def get_workspace_size(cls) -> int:
+        """
+        Choose TensorRT workspace based on model dims with name-based fallback.
+        Env override: WYOMING_TRT_WORKSPACE_GB (float GB).
+        """
+        # env override (in GB) takes precedence
+        override = os.getenv("WYOMING_TRT_WORKSPACE_GB")
+        if override:
+            try:
+                gb = float(override.strip())
+                if gb <= 0:
+                    logger.warning(
+                        "Invalid WYOMING_TRT_WORKSPACE_GB=%r; must be positive.",
+                        override,
+                    )
+                else:
+                    size = int(gb * (1 << 30))
+                    logger.debug(
+                        "Using WYOMING_TRT_WORKSPACE_GB=%s -> %d bytes",
+                        override,
+                        size,
+                    )
+                    return size
+            except ValueError:
+                logger.warning(
+                    "Invalid WYOMING_TRT_WORKSPACE_GB=%r; ignoring.", override
+                )
+
+        # dims-based detection with name fallback
+        try:
+            dims = cls._load_model_once()
+            is_large_by_dims = (
+                getattr(dims, "n_text_state", 0) >= 1280
+                or getattr(dims, "n_audio_state", 0) >= 1280
+            )
+        except (OSError, RuntimeError, ImportError, ValueError) as e:
+            logger.debug("Could not load model dimensions for workspace sizing: %s", e)
+            is_large_by_dims = False
+
+        model_key = cls.model.lower()
+        is_large = is_large_by_dims or model_key in LARGE_MODELS
+        if is_large:
+            logger.debug(
+                "Workspace via %s: 4 GiB (dims_large=%s, name_large=%s)",
+                "dims" if is_large_by_dims else "name",
+                is_large_by_dims,
+                model_key in LARGE_MODELS,
+            )
+            return 1 << 32
+        logger.debug("Workspace via default: %d bytes", cls.max_workspace_size)
+        return cls.max_workspace_size
+
+    @classmethod
     @torch.no_grad()
     def _load_model_once(cls) -> ModelDimensions:
+        """
+        Load model dimensions once and cache them with proper memory cleanup.
+
+        This method loads the Whisper model to extract its dimensions and then
+        immediately frees the model object to prevent memory accumulation,
+        which is especially important for large models.
+
+        Returns:
+            ModelDimensions: The cached model dimensions.
+        """
         if cls._dims is None:
-            model_inst = load_model(cls.model).cuda().eval()
-            cls._dims = model_inst.dims
+            model_inst = load_model(cls.model, device="cpu").eval()
+            try:
+                cls._dims = model_inst.dims
+            finally:
+                del model_inst
         return cls._dims
 
     @classmethod
     @torch.no_grad()
     def build_text_decoder_engine(cls) -> torch2trt.TRTModule:
+        """
+        Build TensorRT engine for text decoder with improved memory management.
+
+        This method builds a TensorRT-optimized version of the text decoder
+        while implementing proper memory cleanup to prevent GPU memory
+        accumulation, especially important for large models.
+
+        Returns:
+            torch2trt.TRTModule: Optimized TensorRT text decoder engine.
+        """
         dims = cls._load_model_once()
         model_inst = load_model(cls.model).cuda().eval()
-        decoder_blocks_module = _TextDecoderEngine(model_inst.decoder.blocks)
-        x = torch.randn(1, 1, dims.n_text_state).cuda()
-        xa = torch.randn(1, dims.n_audio_ctx, dims.n_audio_state).cuda()
-        mask = torch.randn(dims.n_text_ctx, dims.n_text_ctx).cuda()
+        try:
+            decoder_blocks_module = _TextDecoderEngine(model_inst.decoder.blocks)
+        finally:
+            # Clear model instance early to free memory
+            del model_inst
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+
+        dtype = torch.float16 if cls.fp16_mode else torch.float32
+        x = torch.randn(1, 1, dims.n_text_state, device="cuda", dtype=dtype)
+        xa = torch.randn(
+            1, dims.n_audio_ctx, dims.n_audio_state, device="cuda", dtype=dtype
+        )
+        mask = torch.randn(dims.n_text_ctx, dims.n_text_ctx, device="cuda", dtype=dtype)
         engine = torch2trt.torch2trt(
             decoder_blocks_module,
             [x, xa, mask],
@@ -416,7 +512,7 @@ class WhisperTRTBuilder:
             ],
             input_names=["x", "xa", "mask"],
             output_names=["output"],
-            max_workspace_size=cls.max_workspace_size,
+            max_workspace_size=cls.get_workspace_size(),
             fp16_mode=cls.fp16_mode,
             log_level=tensorrt.Logger.VERBOSE if cls.verbose else tensorrt.Logger.ERROR,
         )
@@ -425,22 +521,46 @@ class WhisperTRTBuilder:
     @classmethod
     @torch.no_grad()
     def build_audio_encoder_engine(cls) -> torch2trt.TRTModule:
+        """
+        Build TensorRT engine for audio encoder with improved memory management.
+
+        This method builds a TensorRT-optimized version of the audio encoder
+        while implementing proper memory cleanup to prevent GPU memory
+        accumulation, especially important for large models.
+
+        Returns:
+            torch2trt.TRTModule: Optimized TensorRT audio encoder engine.
+        """
         dims = cls._load_model_once()
         model_inst = load_model(cls.model).cuda().eval()
-        encoder_module = _AudioEncoderEngine(
-            model_inst.encoder.conv1,
-            model_inst.encoder.conv2,
-            model_inst.encoder.blocks,
-            model_inst.encoder.ln_post,
-        )
-        n_frames = dims.n_audio_ctx * 2
-        x = torch.randn(1, dims.n_mels, n_frames).cuda()
-        positional_embedding = model_inst.encoder.positional_embedding.cuda().detach()
+        try:
+            encoder_module = _AudioEncoderEngine(
+                model_inst.encoder.conv1,
+                model_inst.encoder.conv2,
+                model_inst.encoder.blocks,
+                model_inst.encoder.ln_post,
+            )
+            n_frames = dims.n_audio_ctx * 2
+            dtype = torch.float16 if cls.fp16_mode else torch.float32
+            x = torch.randn(1, dims.n_mels, n_frames, device="cuda", dtype=dtype)
+            positional_embedding = (
+                model_inst.encoder.positional_embedding.detach().cpu()
+            )
+            if cls.fp16_mode:
+                positional_embedding = positional_embedding.half()
+            positional_embedding = (
+                positional_embedding.pin_memory().cuda(non_blocking=True).contiguous()
+            )
+        finally:
+            # Clear model instance early to free memory
+            del model_inst
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
         engine = torch2trt.torch2trt(
             encoder_module,
             [x, positional_embedding],
             use_onnx=True,
-            min_shapes=[(1, dims.n_mels, 1), (1, dims.n_audio_state)],
+            min_shapes=[(1, dims.n_mels, 1), (dims.n_audio_ctx, dims.n_audio_state)],
             opt_shapes=[
                 (1, dims.n_mels, n_frames),
                 (dims.n_audio_ctx, dims.n_audio_state),
@@ -451,7 +571,7 @@ class WhisperTRTBuilder:
             ],
             input_names=["x", "positional_embedding"],
             output_names=["output"],
-            max_workspace_size=cls.max_workspace_size,
+            max_workspace_size=cls.get_workspace_size(),
             fp16_mode=cls.fp16_mode,
             log_level=tensorrt.Logger.VERBOSE if cls.verbose else tensorrt.Logger.ERROR,
         )
@@ -460,27 +580,35 @@ class WhisperTRTBuilder:
     @classmethod
     @torch.no_grad()
     def get_text_decoder_extra_state(cls) -> Dict[str, Any]:
-        model_inst = load_model(cls.model).cuda().eval()
-        extra_state = {
-            "token_embedding": model_inst.decoder.token_embedding.state_dict(),
-            "positional_embedding": model_inst.decoder.positional_embedding,
-            "ln": model_inst.decoder.ln.state_dict(),
-            "mask": model_inst.decoder.mask,
-        }
+        model_inst = load_model(cls.model, device="cpu").eval()  # CPU is enough
+        try:
+            extra_state = {
+                "token_embedding": model_inst.decoder.token_embedding.state_dict(),
+                "positional_embedding": model_inst.decoder.positional_embedding,
+                "ln": model_inst.decoder.ln.state_dict(),
+                "mask": model_inst.decoder.mask,
+            }
+        finally:
+            del model_inst
         return extra_state
 
     @classmethod
     @torch.no_grad()
     def get_audio_encoder_extra_state(cls) -> Dict[str, Any]:
-        model_inst = load_model(cls.model).cuda().eval()
-        extra_state = {"positional_embedding": model_inst.encoder.positional_embedding}
+        model_inst = load_model(cls.model, device="cpu").eval()  # CPU is enough
+        try:
+            extra_state = {
+                "positional_embedding": model_inst.encoder.positional_embedding
+            }
+        finally:
+            del model_inst
         return extra_state
 
     @classmethod
     @torch.no_grad()
     def build(cls, output_path: str, verbose: bool = False) -> None:
         cls.verbose = verbose
-        dims = asdict(load_model(cls.model).dims)
+        dims = asdict(cls._load_model_once())  # Reuse cached dims
         checkpoint = {
             "whisper_trt_version": __version__,
             "dims": dims,
@@ -494,13 +622,16 @@ class WhisperTRTBuilder:
     @classmethod
     def get_tokenizer(cls) -> Tokenizer:
         if cls._tokenizer is None:
-            model_inst = load_model(cls.model)
-            cls._tokenizer = whisper.tokenizer.get_tokenizer(
-                model_inst.is_multilingual,
-                num_languages=model_inst.num_languages,
-                language=None,
-                task="transcribe",
-            )
+            model_inst = load_model(cls.model, device="cpu")
+            try:
+                cls._tokenizer = whisper.tokenizer.get_tokenizer(
+                    model_inst.is_multilingual,
+                    num_languages=model_inst.num_languages,
+                    language=None,
+                    task="transcribe",
+                )
+            finally:
+                del model_inst
         return cls._tokenizer
 
     @classmethod
@@ -513,7 +644,11 @@ class WhisperTRTBuilder:
         audio_encoder_engine = torch2trt.TRTModule().cuda()
         audio_encoder_engine.load_state_dict(checkpoint["audio_encoder_engine"])
         aes = checkpoint["audio_encoder_extra_state"]
-        audio_positional_embedding = aes["positional_embedding"]
+        audio_positional_embedding = (
+            aes["positional_embedding"].contiguous().cuda(non_blocking=True)
+        )
+        if cls.fp16_mode:
+            audio_positional_embedding = audio_positional_embedding.half()
         encoder = AudioEncoderTRT(audio_encoder_engine, audio_positional_embedding)
         # Text decoder.
 
@@ -522,12 +657,19 @@ class WhisperTRTBuilder:
         tes = checkpoint["text_decoder_extra_state"]
         text_token_embedding = nn.Embedding(dims.n_vocab, dims.n_text_state)
         text_token_embedding.load_state_dict(tes["token_embedding"])
+        text_token_embedding = text_token_embedding.cuda()
+        if cls.fp16_mode:
+            text_token_embedding = text_token_embedding.half()
         text_positional_embedding = nn.Parameter(tes["positional_embedding"]).cuda()
+        if cls.fp16_mode:
+            text_positional_embedding = text_positional_embedding.half()
         text_ln = LayerNorm(dims.n_text_state)
         text_ln.load_state_dict(tes["ln"])
         text_mask = tes["mask"]
         if not text_mask.is_cuda:
             text_mask = text_mask.cuda()
+        if cls.fp16_mode and text_mask.dtype != torch.float16:
+            text_mask = text_mask.half()
         decoder = TextDecoderTRT(
             text_decoder_engine,
             text_token_embedding,
@@ -659,7 +801,7 @@ def load_trt_model(
     )
 
     if name not in MODEL_BUILDERS:
-        raise RuntimeError(f"Model '{name}' is not supported by WhisperTRT.")
+        raise RuntimeError("Unsupported model")
     # determine on-disk path
 
     if path is None:
@@ -668,17 +810,64 @@ def load_trt_model(
     builder = MODEL_BUILDERS[name]
     if not os.path.exists(path):
         if not build:
-            raise RuntimeError(f"No model found at {path}; pass build=True.")
-        builder.build(path, verbose=verbose)
+            raise RuntimeError("Build required")
+        try:
+            builder.build(path, verbose=verbose)
+        except (RuntimeError, OSError, ImportError, ValueError) as e:
+            msg = str(e).lower()
+            oom = any(
+                s in msg
+                for s in (
+                    "out of memory",
+                    "cuda out of memory",
+                    "cudnn",
+                    "cublas",
+                    "cumemalloc",
+                    "cuda error",
+                )
+            )
+            if oom:
+                logger.exception(
+                    "Failed to build model %s due to memory issues. "
+                    "Try setting WYOMING_TRT_WORKSPACE_GB (e.g., 4) or selecting a smaller model.",
+                    name,
+                )
+                torch.cuda.empty_cache()
+            else:
+                logger.exception("Failed to build model %s", name)
+            raise
     # load the TRT model (already .cuda().eval() inside)
 
-    trt_model = builder.load(path)
+    try:
+        trt_model = builder.load(path)
+    except (RuntimeError, OSError, ImportError, ValueError) as e:
+        msg = str(e).lower()
+        oom = any(
+            s in msg
+            for s in (
+                "out of memory",
+                "cuda out of memory",
+                "cudnn",
+                "cublas",
+                "cumemalloc",
+                "cuda error",
+            )
+        )
+        if oom:
+            logger.exception(
+                "Failed to load TRT model %s (GPU memory insufficient). Consider a smaller model.",
+                name,
+            )
+            torch.cuda.empty_cache()
+        else:
+            logger.exception("Failed to load TRT model %s", name)
+        raise
 
     # 1) Warm up with one very short silent buffer to clear cache
 
     try:
         silence = np.zeros((whisper.audio.N_SAMPLES,), dtype=np.float32)
         _ = trt_model.transcribe(silence, language=language, stream=False)
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         logger.debug("Warm-up skipped: %s", e)
     return trt_model
