@@ -88,7 +88,7 @@ jobs:
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
-        uses: docker/metadata-action@dde548f1603e003959483c86c72ec03454216f9c
+        uses: docker/metadata-action@d24d429af23073facc066506898a0eae1f24b9ad
         with:
           images: captnspdr/wyoming-whisper-trt
 
