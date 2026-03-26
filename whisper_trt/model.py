@@ -373,6 +373,7 @@ class WhisperTRT(nn.Module):
 class WhisperTRTBuilder:
     model: str
     fp16_mode: bool = False
+    quant_mode: str = "float16"  # Options: "float32", "float16", "int8"
     max_workspace_size: int = 1 << 30
     verbose: bool = False
     _tokenizer: Optional[Tokenizer] = None
@@ -395,10 +396,12 @@ class WhisperTRTBuilder:
         x = torch.randn(1, 1, dims.n_text_state).cuda()
         xa = torch.randn(1, dims.n_audio_ctx, dims.n_audio_state).cuda()
         mask = torch.randn(dims.n_text_ctx, dims.n_text_ctx).cuda()
+        int8_mode = cls.quant_mode == "int8"
         engine = torch2trt.torch2trt(
             decoder_blocks_module,
             [x, xa, mask],
             use_onnx=True,
+            int8_mode=int8_mode,
             min_shapes=[
                 (1, 1, dims.n_text_state),
                 (1, 1, dims.n_audio_state),
@@ -417,7 +420,7 @@ class WhisperTRTBuilder:
             input_names=["x", "xa", "mask"],
             output_names=["output"],
             max_workspace_size=cls.max_workspace_size,
-            fp16_mode=cls.fp16_mode,
+            fp16_mode=cls.fp16_mode if not int8_mode else False,
             log_level=tensorrt.Logger.VERBOSE if cls.verbose else tensorrt.Logger.ERROR,
         )
         return engine
@@ -436,10 +439,12 @@ class WhisperTRTBuilder:
         n_frames = dims.n_audio_ctx * 2
         x = torch.randn(1, dims.n_mels, n_frames).cuda()
         positional_embedding = model_inst.encoder.positional_embedding.cuda().detach()
+        int8_mode = cls.quant_mode == "int8"
         engine = torch2trt.torch2trt(
             encoder_module,
             [x, positional_embedding],
             use_onnx=True,
+            int8_mode=int8_mode,
             min_shapes=[(1, dims.n_mels, 1), (1, dims.n_audio_state)],
             opt_shapes=[
                 (1, dims.n_mels, n_frames),
@@ -452,7 +457,7 @@ class WhisperTRTBuilder:
             input_names=["x", "positional_embedding"],
             output_names=["output"],
             max_workspace_size=cls.max_workspace_size,
-            fp16_mode=cls.fp16_mode,
+            fp16_mode=cls.fp16_mode if not int8_mode else False,
             log_level=tensorrt.Logger.VERBOSE if cls.verbose else tensorrt.Logger.ERROR,
         )
         return engine
@@ -653,8 +658,9 @@ def load_trt_model(
     # print current precision settings
 
     logger.debug(
-        "Loading TRT model '%s' with fp16_mode=%s",
+        "Loading TRT model '%s' with quant_mode=%s, fp16_mode=%s",
         name,
+        WhisperTRTBuilder.quant_mode,
         WhisperTRTBuilder.fp16_mode,
     )
 

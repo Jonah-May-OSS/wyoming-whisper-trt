@@ -229,8 +229,8 @@ async def main() -> None:
     parser.add_argument(
         "--compute-type",
         default="float16",
-        choices=["float32", "float16"],
-        help="Compute type (float32, float16)",
+        choices=["float32", "float16", "int8"],
+        help="Compute type (float32, float16, int8)",
     )
     parser.add_argument(
         "--beam-size",
@@ -280,6 +280,7 @@ async def main() -> None:
     model_name = normalize_model_name(args.model)
 
     # Set compute-type
+    WhisperTRTBuilder.quant_mode = args.compute_type
     WhisperTRTBuilder.fp16_mode = args.compute_type == "float16"
 
     # Set download directory to first data directory if not specified
