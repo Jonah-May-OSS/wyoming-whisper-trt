@@ -15,8 +15,7 @@ fi
 source .venv/bin/activate
 
 # Check if torch2trt is installed in this venv
-python -c "import torch2trt" 2>/dev/null
-if [ $? -ne 0 ]; then
+if ! python -c "import torch2trt" 2>/dev/null; then
     echo "torch2trt not found. Installing via script/setup..."
     chmod +x script/setup
     ./script/setup
