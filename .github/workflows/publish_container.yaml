@@ -61,7 +61,7 @@ jobs:
           sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@a4bc6cde7eccda2bdcfac02ca3348c91290880bd
+        uses: docker/setup-qemu-action@6804d313191b81cfc5feb5065848250370954232
         with:
           platforms: all
 
@@ -78,17 +78,17 @@ jobs:
           sudo systemctl restart docker
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@c8ad1c5d0f6f39c2bc446b807fa8ea2afadcddb6
+        uses: docker/setup-buildx-action@172dff065fb2e54aaed577fd667975cd412819fb
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@9fe7774c8f8ebfade96f0a62aa10f3882309d517
+        uses: docker/login-action@a0d57b8e43b6ef1cca20559d68cec2227e63fccd
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
-        uses: docker/metadata-action@b13d25e5fcf2e04305d8aedc9a6c28ebe258e934
+        uses: docker/metadata-action@4378dc6be7f72231dfe78ac7e0364a44f1c9f54b
         with:
           images: captnspdr/wyoming-whisper-trt
 
@@ -163,7 +163,7 @@ jobs:
 
       - name: Build and Push AMD64 dGPU Image
         id: push-amd64
-        uses: docker/build-push-action@dbac3ca1e5410ec04d2cce48cfbcfa3175fb8f4f
+        uses: docker/build-push-action@b66d8774c665b789105b440514f0c97e6f19b06f
         with:
           context: .
           file: ./Dockerfile
@@ -174,7 +174,7 @@ jobs:
 
       - name: Build and Push ARM64 dGPU Image
         id: push-arm64
-        uses: docker/build-push-action@dbac3ca1e5410ec04d2cce48cfbcfa3175fb8f4f
+        uses: docker/build-push-action@b66d8774c665b789105b440514f0c97e6f19b06f
         with:
           context: .
           file: ./Dockerfile.arm64
@@ -185,7 +185,7 @@ jobs:
 
       - name: Build and Push ARM64 iGPU Image
         id: push-arm64-igpu
-        uses: docker/build-push-action@dbac3ca1e5410ec04d2cce48cfbcfa3175fb8f4f
+        uses: docker/build-push-action@b66d8774c665b789105b440514f0c97e6f19b06f
         with:
           context: .
           file: ./Dockerfile.igpu
