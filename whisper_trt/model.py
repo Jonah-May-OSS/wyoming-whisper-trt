@@ -373,7 +373,7 @@ class WhisperTRT(nn.Module):
 class WhisperTRTBuilder:
     model: str
     fp16_mode: bool = False
-    quant_mode: str = "float16"  # Options: "float32", "float16", "int8"
+    quant_mode: str = "float32"  # Options: "float32", "float16", "int8"
     max_workspace_size: int = 1 << 30
     verbose: bool = False
     _tokenizer: Optional[Tokenizer] = None
