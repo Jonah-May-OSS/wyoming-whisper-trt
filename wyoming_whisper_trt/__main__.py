@@ -20,7 +20,7 @@ from whisper.model import disable_sdpa
 from wyoming.info import AsrModel, AsrProgram, Attribution, Info
 from wyoming.server import AsyncServer
 
-from whisper_trt import MODEL_FILENAMES, WhisperTRT, WhisperTRTBuilder, load_trt_model
+from whisper_trt import MODEL_FILENAMES, WhisperTRT, WhisperTRTBuilder, get_model_filename, load_trt_model
 
 from . import __version__
 from .handler import WhisperTrtEventHandler
@@ -301,7 +301,7 @@ async def main() -> None:
     # Load Whisper TRT model
     try:
         logger.info(f"Loading Whisper TRT model '{model_name}'...")
-        model_path = os.path.join(args.download_dir, MODEL_FILENAMES[model_name])
+        model_path = os.path.join(args.download_dir, get_model_filename(model_name, args.compute_type))
         trt_model = load_trt_model(
             args.model,
             path=model_path,

@@ -648,6 +648,30 @@ MODEL_BUILDERS = {
 }
 
 
+def get_model_filename(name: str, quant_mode: str) -> str:
+    """
+    Returns the compute-type-aware filename for a given model and quantization mode.
+
+    Each distinct compute type (float32, float16, int8) produces a separate cached
+    engine file, preventing silent reuse of an engine built under a different precision.
+
+    Args:
+        name (str): The model name (e.g. "tiny", "base.en").
+        quant_mode (str): The quantization mode ("float32", "float16", or "int8").
+
+    Returns:
+        str: Filename with the quant mode embedded (e.g. "tiny_trt_float16.pth").
+
+    Raises:
+        RuntimeError: If ``name`` is not a recognised model name.
+    """
+    if name not in MODEL_FILENAMES:
+        raise RuntimeError(f"Model '{name}' is not supported by WhisperTRT.")
+    base = MODEL_FILENAMES[name]
+    stem, ext = os.path.splitext(base)
+    return f"{stem}_{quant_mode}{ext}"
+
+
 def load_trt_model(
     name: str,
     path: Optional[str] = None,
@@ -666,10 +690,12 @@ def load_trt_model(
 
     if name not in MODEL_BUILDERS:
         raise RuntimeError(f"Model '{name}' is not supported by WhisperTRT.")
-    # determine on-disk path
+    # determine on-disk path — include quant_mode in filename to avoid silent
+    # reuse of an engine built under a different precision.
 
     if path is None:
-        path = os.path.join(get_cache_dir(), MODEL_FILENAMES[name])
+        filename = get_model_filename(name, WhisperTRTBuilder.quant_mode)
+        path = os.path.join(get_cache_dir(), filename)
         make_cache_dir()
     builder = MODEL_BUILDERS[name]
     if not os.path.exists(path):
