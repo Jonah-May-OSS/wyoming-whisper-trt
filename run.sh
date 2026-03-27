@@ -14,8 +14,9 @@ fi
 # Activate the Python virtual environment
 source .venv/bin/activate
 
-# Check if torch2trt is installed in this venv
-if ! python -c "import torch2trt" 2>/dev/null; then
+# Check if torch2trt is installed in this venv (package-presence check only;
+# avoids triggering set -e from import-time failures unrelated to installation).
+if ! python -c "import importlib.util; exit(0 if importlib.util.find_spec('torch2trt') else 1)" 2>/dev/null; then
     echo "torch2trt not found. Installing via script/setup..."
     chmod +x script/setup
     ./script/setup
