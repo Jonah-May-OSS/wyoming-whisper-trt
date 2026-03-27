@@ -17,9 +17,15 @@ from functools import partial
 from pathlib import Path
 
 from whisper.model import disable_sdpa
-from whisper_trt import WhisperTRT, WhisperTRTBuilder, get_model_filename, load_trt_model
 from wyoming.info import AsrModel, AsrProgram, Attribution, Info
 from wyoming.server import AsyncServer
+
+from whisper_trt import (
+    WhisperTRT,
+    WhisperTRTBuilder,
+    get_model_filename,
+    load_trt_model,
+)
 
 from . import __version__
 from .handler import WhisperTrtEventHandler
