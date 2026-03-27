@@ -15,6 +15,7 @@ This module must be imported *before* ``torch2trt`` (and therefore before
 import math
 import struct
 
+import numpy as np
 import onnx.helper
 
 if not hasattr(onnx.helper, "float32_to_bfloat16"):
@@ -41,8 +42,6 @@ if not hasattr(onnx.helper, "float32_to_float8e4m3"):
         saturate: bool = True,
     ) -> int:
         """Convert a float32 scalar to float8 e4m3 returned as int."""
-        import numpy as np  # local import - numpy is a heavy dependency
-
         if not fn:
             raise NotImplementedError(
                 "float32_to_float8e4m3 not implemented with fn=False."
