@@ -38,7 +38,7 @@ jobs:
           sudo apt-get install -y nvidia-open
       
       - name: Install CUDA Toolkit
-        uses: Jimver/cuda-toolkit@406fa58d8abbf1bad2edd217b58b073dd2f548e4
+        uses: Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76
         with:
           use-github-cache: false
 
