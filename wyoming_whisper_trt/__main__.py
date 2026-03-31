@@ -310,7 +310,7 @@ async def main() -> None:
             args.download_dir, get_model_filename(model_name, args.compute_type)
         )
         trt_model = load_trt_model(
-            args.model,
+            model_name,
             path=model_path,
             build=True,
             verbose=args.debug,
