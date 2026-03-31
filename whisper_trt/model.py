@@ -380,6 +380,24 @@ class WhisperTRTBuilder:
     _dims: Optional[ModelDimensions] = None
 
     @classmethod
+    def get_compute_type(cls) -> str:
+        """Return the effective compute type based on builder configuration.
+
+        Reconciles ``quant_mode`` and ``fp16_mode`` into a single canonical
+        string used to key on-disk engine filenames.
+
+        Returns:
+            str: "int8" when ``quant_mode == "int8"``;
+                 "float16" when ``fp16_mode`` is True;
+                 "float32" otherwise.
+        """
+        if cls.quant_mode == "int8":
+            return "int8"
+        if cls.fp16_mode:
+            return "float16"
+        return "float32"
+
+    @classmethod
     @torch.no_grad()
     def _load_model_once(cls) -> ModelDimensions:
         if cls._dims is None:
@@ -682,8 +700,9 @@ def load_trt_model(
     # print current precision settings
 
     logger.debug(
-        "Loading TRT model '%s' with quant_mode=%s, fp16_mode=%s",
+        "Loading TRT model '%s' with compute_type=%s (quant_mode=%s, fp16_mode=%s)",
         name,
+        WhisperTRTBuilder.get_compute_type(),
         WhisperTRTBuilder.quant_mode,
         WhisperTRTBuilder.fp16_mode,
     )
@@ -694,7 +713,7 @@ def load_trt_model(
     # reuse of an engine built under a different precision.
 
     if path is None:
-        filename = get_model_filename(name, WhisperTRTBuilder.quant_mode)
+        filename = get_model_filename(name, WhisperTRTBuilder.get_compute_type())
         path = os.path.join(get_cache_dir(), filename)
         make_cache_dir()
     builder = MODEL_BUILDERS[name]

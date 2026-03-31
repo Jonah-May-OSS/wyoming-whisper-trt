@@ -307,7 +307,8 @@ async def main() -> None:
     try:
         logger.info(f"Loading Whisper TRT model '{model_name}'...")
         model_path = os.path.join(
-            args.download_dir, get_model_filename(model_name, args.compute_type)
+            args.download_dir,
+            get_model_filename(model_name, WhisperTRTBuilder.get_compute_type()),
         )
         trt_model = load_trt_model(
             model_name,
