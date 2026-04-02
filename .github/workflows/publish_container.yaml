@@ -61,7 +61,7 @@ jobs:
           sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@6412e4f97516bb3da89fd7bb5fe523a3b2956c06
+        uses: docker/setup-qemu-action@f4e8deed0c3c26542279f4042c0e1d059cbf012d
         with:
           platforms: all
 
