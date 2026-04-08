@@ -24,10 +24,15 @@ import os
 import time
 from typing import Optional, Dict, Any, List
 
-import torch
-import torch.nn.functional as F
 import numpy as np
+import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
+# Apply onnx.helper compatibility shims before torch2trt / onnx-graphsurgeon
+# are imported (see whisper_trt/_onnx_compat.py for details).
+from . import _onnx_compat  # noqa: F401
+
 import torch2trt
 import tensorrt
 
