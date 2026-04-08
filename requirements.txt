@@ -8,5 +8,5 @@ tensorrt~=10.16.1.11
 packaging~=26.0
 onnx~=1.19.1
 onnxscript~=0.6.2
-onnx-graphsurgeon==0.5.8
+onnx-graphsurgeon==0.6.1
 torch==2.11.0
