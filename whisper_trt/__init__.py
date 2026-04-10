@@ -21,7 +21,6 @@
 
 """Public API for the whisper_trt package."""
 
-
 from .__version__ import __version__
 from .cache import get_cache_dir, set_cache_dir
 from .model import MODEL_FILENAMES, WhisperTRT, WhisperTRTBuilder, load_trt_model

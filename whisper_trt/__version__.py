@@ -21,5 +21,4 @@
 
 """Version information for whisper_trt."""
 
-
 __version__ = "1.1.0"
