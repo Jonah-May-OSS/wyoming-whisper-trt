@@ -27,12 +27,14 @@ from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass
 from queue import Queue
-from typing import Any
 
 # from multiprocessing import Process, Queue, Event
 from threading import Event, Thread
+from typing import Any
 
 import numpy as np
+
+from whisper_trt import set_cache_dir
 
 try:
     import pyaudio
@@ -49,9 +51,6 @@ def load_vad() -> Any:
             "VAD dependency is missing. Install silero-vad to run this example."
         ) from err
     return load_silero_vad()
-
-
-from whisper_trt import set_cache_dir
 
 
 def find_respeaker_audio_device_index():
