@@ -19,7 +19,18 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
+"""Public API for the whisper_trt package."""
 
 from .__version__ import __version__
-from .model import WhisperTRT, load_trt_model, MODEL_FILENAMES, WhisperTRTBuilder
 from .cache import get_cache_dir, set_cache_dir
+from .model import MODEL_FILENAMES, WhisperTRT, WhisperTRTBuilder, load_trt_model
+
+__all__ = [
+    "MODEL_FILENAMES",
+    "WhisperTRT",
+    "WhisperTRTBuilder",
+    "__version__",
+    "get_cache_dir",
+    "load_trt_model",
+    "set_cache_dir",
+]
