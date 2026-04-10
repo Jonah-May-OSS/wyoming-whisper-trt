@@ -1,6 +1,6 @@
 name: Ruff
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 on: [pull_request]
@@ -10,11 +10,46 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
-      - uses: chartboost/ruff-action@1ec810db51b3ebdd902c812e962d2f7aafe85fcf
         with:
-          src: wyoming_whisper_trt/ tests/
-          args: check --output-format=github
-      - uses: chartboost/ruff-action@1ec810db51b3ebdd902c812e962d2f7aafe85fcf
+          # Use a PAT if provided so downstream workflows trigger on bot pushes.
+          token: ${{ secrets.CI_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Ruff Check (Auto-fix)
+        uses: astral-sh/ruff-action@v3
         with:
-          src: wyoming_whisper_trt/ tests/
-          args: format --check
+          version: "0.15.10"
+          src: "."
+          args: "check --fix"
+
+      - name: Ruff Format (Auto-fix)
+        uses: astral-sh/ruff-action@v3
+        with:
+          version: "0.15.10"
+          src: "."
+          args: "format"
+
+      - name: Commit auto-fixes
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        shell: bash
+        env:
+          CI_PUSH_TOKEN: ${{ secrets.CI_PUSH_TOKEN }}
+        run: |
+          BRANCH="${{ github.event.pull_request.head.ref }}"
+          if [ -z "$CI_PUSH_TOKEN" ]; then
+            echo "CI_PUSH_TOKEN is not set. Using GITHUB_TOKEN; downstream workflows may not trigger from this push."
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && echo "No changes to commit." && exit 0
+          git commit -m "Apply Ruff auto-fixes"
+          # Rebase bot commit on latest branch tip to avoid non-fast-forward push failures.
+          for attempt in 1 2 3; do
+            git fetch origin "$BRANCH"
+            git rebase "origin/$BRANCH"
+            if git push origin "HEAD:$BRANCH"; then
+              exit 0
+            fi
+          done
+          echo "Failed to push Ruff auto-fixes after 3 attempts."
+          exit 1

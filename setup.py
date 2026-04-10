@@ -9,7 +9,7 @@ this_dir = Path(__file__).parent
 requirements = []
 requirements_path = this_dir / "requirements.txt"
 if requirements_path.is_file():
-    with open(requirements_path, "r", encoding="utf-8") as requirements_file:
+    with open(requirements_path, encoding="utf-8") as requirements_file:
         requirements = requirements_file.read().splitlines()
 
 module_name = "wyoming_whisper_trt"

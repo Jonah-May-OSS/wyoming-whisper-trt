@@ -20,59 +20,45 @@
 # DEALINGS IN THE SOFTWARE.
 
 
-import numpy as np
-import time
-import pyaudio
-import socketio
-
 # import eventlet
 
-import asyncio
-import uvicorn
-import starlette
-
 # from aiohttp import web
-
-import socketio
-import threading
+from collections import deque
+from contextlib import contextmanager
+from dataclasses import dataclass
+from queue import Queue
 
 # from multiprocessing import Process, Queue, Event
+from threading import Event, Thread
 
-from threading import Thread, Event
-from queue import Queue
-from collections import deque
-from dataclasses import dataclass
-from contextlib import contextmanager
-from typing import Optional
+import numpy as np
+import pyaudio
 from whisper_trt.vad import load_vad
-from whisper_trt import load_trt_model, set_cache_dir
+
+from whisper_trt import set_cache_dir
 
 
 def find_respeaker_audio_device_index():
-
     p = pyaudio.PyAudio()
 
     info = p.get_host_api_info_by_index(0)
     num_devices = info.get("deviceCount")
 
     for i in range(num_devices):
-
         device_info = p.get_device_info_by_host_api_device_index(0, i)
 
         if "respeaker" in device_info.get("name").lower():
-
             device_index = i
     return device_index
 
 
 @contextmanager
 def get_respeaker_audio_stream(
-    device_index: Optional[int] = None,
+    device_index: int | None = None,
     sample_rate: int = 16000,
     channels: int = 6,
     bitwidth: int = 2,
 ):
-
     if device_index is None:
         device_index = find_respeaker_audio_device_index()
     if device_index is None:
@@ -123,7 +109,6 @@ class AudioSegment:
 
 
 class Microphone(Thread):
-
     def __init__(
         self,
         output_queue: Queue,
@@ -171,7 +156,6 @@ class Microphone(Thread):
 
 
 class VAD(Thread):
-
     def __init__(
         self,
         input_queue: Queue,
@@ -200,7 +184,6 @@ class VAD(Thread):
         self.vad_end_callback = vad_end_callback
 
     def run(self):
-
         vad = load_vad()
 
         # warmup run
@@ -216,7 +199,6 @@ class VAD(Thread):
         if self.ready_flag is not None:
             self.ready_flag.set()
         while True:
-
             audio_chunk = self.input_queue.get()
 
             voice_prob = float(
@@ -240,7 +222,7 @@ class VAD(Thread):
             )
 
             if is_voice > prev_is_voice:
-                speech_chunks = [chunk for chunk in max_filter_window]
+                speech_chunks = list(max_filter_window)
                 # start voice
 
                 speech_chunks.append(chunk)
@@ -263,7 +245,6 @@ class VAD(Thread):
 
 
 class ASR(Thread):
-
     def __init__(
         self,
         model: str,
@@ -271,7 +252,7 @@ class ASR(Thread):
         input_queue,
         use_channel: int = 0,
         ready_flag=None,
-        model_path: str = None,
+        model_path: str | None = None,
         asr_callback=None,
     ):
         super().__init__()
@@ -284,7 +265,6 @@ class ASR(Thread):
         self.asr_callback = asr_callback
 
     def run(self):
-
         if self.backend == "whisper_trt":
             from whisper_trt import load_trt_model
 
@@ -301,7 +281,7 @@ class ASR(Thread):
                     self.model = model
 
                 def transcribe(self, audio):
-                    segs, info = self.model.transcribe(audio)
+                    segs, _info = self.model.transcribe(audio)
                     text = "".join([seg.text for seg in segs])
                     return {"text": text}
 
@@ -313,7 +293,6 @@ class ASR(Thread):
         if self.ready_flag is not None:
             self.ready_flag.set()
         while True:
-
             speech_segment = self.input_queue.get()
 
             audio = np.concatenate(
@@ -330,23 +309,21 @@ class ASR(Thread):
 
 
 class WhisperTRTPipeline:
-
     def __init__(
         self,
         model: str = "small.en",
         vad_window: int = 5,
         backend: str = "whisper_trt",
-        cache_dir: Optional[str] = None,
+        cache_dir: str | None = None,
         vad_start_callback=None,
         vad_end_callback=None,
         asr_callback=None,
-        mic_device_index: Optional[int] = None,
+        mic_device_index: int | None = None,
         mic_channel_for_asr: int = 0,
         mic_num_channels: int = 6,
         mic_sample_rate: int = 16000,
         mic_bitwidth: int = 2,
     ):
-
         self.audio_chunks = Queue()
         self.speech_segments = Queue()
         self.speech_outputs = Queue()
@@ -383,7 +360,6 @@ class WhisperTRTPipeline:
         )
 
     def start(self):
-
         self.vad.start()
         self.asr.start()
 
@@ -393,14 +369,12 @@ class WhisperTRTPipeline:
         self.mic.start()
 
     def join(self):
-
         self.mic.join()
         self.vad.join()
         self.asr.join()
 
 
 if __name__ == "__main__":
-
     import argparse
 
     parser = argparse.ArgumentParser()

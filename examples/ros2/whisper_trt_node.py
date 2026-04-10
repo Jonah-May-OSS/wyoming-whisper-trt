@@ -23,7 +23,6 @@
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
-from rcl_interfaces.msg import ParameterDescriptor
 from whisper_trt_pipeline import WhisperTRTPipeline
 
 

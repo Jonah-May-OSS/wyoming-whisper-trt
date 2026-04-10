@@ -1,0 +1,2 @@
+[TYPECHECK]
+extension-pkg-allow-list=torch2trt
