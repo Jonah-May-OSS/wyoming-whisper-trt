@@ -27,22 +27,42 @@ from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass
 from queue import Queue
+from typing import Any
 
 # from multiprocessing import Process, Queue, Event
 from threading import Event, Thread
 
 import numpy as np
-import pyaudio
-from whisper_trt.vad import load_vad
+
+try:
+    import pyaudio
+except ImportError:  # pragma: no cover - optional dependency for examples
+    pyaudio = None
+
+
+def load_vad() -> Any:
+    """Load VAD backend used by this example."""
+    try:
+        from silero_vad import load_silero_vad
+    except ImportError as err:
+        raise RuntimeError(
+            "VAD dependency is missing. Install silero-vad to run this example."
+        ) from err
+    return load_silero_vad()
+
 
 from whisper_trt import set_cache_dir
 
 
 def find_respeaker_audio_device_index():
+    if pyaudio is None:
+        raise RuntimeError("pyaudio is required to capture live microphone audio")
+
     p = pyaudio.PyAudio()
 
     info = p.get_host_api_info_by_index(0)
     num_devices = info.get("deviceCount")
+    device_index: int | None = None
 
     for i in range(num_devices):
         device_info = p.get_device_info_by_host_api_device_index(0, i)
@@ -59,6 +79,9 @@ def get_respeaker_audio_stream(
     channels: int = 6,
     bitwidth: int = 2,
 ):
+    if pyaudio is None:
+        raise RuntimeError("pyaudio is required to capture live microphone audio")
+
     if device_index is None:
         device_index = find_respeaker_audio_device_index()
     if device_index is None:
@@ -265,6 +288,7 @@ class ASR(Thread):
         self.asr_callback = asr_callback
 
     def run(self):
+        model: Any
         if self.backend == "whisper_trt":
             from whisper_trt import load_trt_model
 
@@ -286,6 +310,8 @@ class ASR(Thread):
                     return {"text": text}
 
             model = FasterWhisperWrapper(WhisperModel(self.model))
+        else:
+            raise ValueError(f"Unsupported backend: {self.backend}")
         # warmup
 
         model.transcribe(np.zeros(1536, dtype=np.float32))
