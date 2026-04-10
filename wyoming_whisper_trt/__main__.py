@@ -20,7 +20,12 @@ from whisper.model import disable_sdpa
 from wyoming.info import AsrModel, AsrProgram, Attribution, Info
 from wyoming.server import AsyncServer
 
-from whisper_trt import MODEL_FILENAMES, WhisperTRT, WhisperTRTBuilder, load_trt_model
+from whisper_trt import (
+    WhisperTRT,
+    WhisperTRTBuilder,
+    get_model_filename,
+    load_trt_model,
+)
 
 from . import __version__
 from .handler import WhisperTrtEventHandler
@@ -229,8 +234,8 @@ async def main() -> None:
     parser.add_argument(
         "--compute-type",
         default="float16",
-        choices=["float32", "float16"],
-        help="Compute type (float32, float16)",
+        choices=["float32", "float16", "int8"],
+        help="Compute type (float32, float16, int8)",
     )
     parser.add_argument(
         "--beam-size",
@@ -280,6 +285,7 @@ async def main() -> None:
     model_name = normalize_model_name(args.model)
 
     # Set compute-type
+    WhisperTRTBuilder.quant_mode = args.compute_type
     WhisperTRTBuilder.fp16_mode = args.compute_type == "float16"
 
     # Set download directory to first data directory if not specified
@@ -300,9 +306,12 @@ async def main() -> None:
     # Load Whisper TRT model
     try:
         logger.info(f"Loading Whisper TRT model '{model_name}'...")
-        model_path = os.path.join(args.download_dir, MODEL_FILENAMES[model_name])
+        model_path = os.path.join(
+            args.download_dir,
+            get_model_filename(model_name, WhisperTRTBuilder.get_compute_type()),
+        )
         trt_model = load_trt_model(
-            args.model,
+            model_name,
             path=model_path,
             build=True,
             verbose=args.debug,

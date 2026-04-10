@@ -373,10 +373,29 @@ class WhisperTRT(nn.Module):
 class WhisperTRTBuilder:
     model: str
     fp16_mode: bool = False
+    quant_mode: str = "float32"  # Options: "float32", "float16", "int8"
     max_workspace_size: int = 1 << 30
     verbose: bool = False
     _tokenizer: Optional[Tokenizer] = None
     _dims: Optional[ModelDimensions] = None
+
+    @classmethod
+    def get_compute_type(cls) -> str:
+        """Return the effective compute type based on builder configuration.
+
+        Reconciles ``quant_mode`` and ``fp16_mode`` into a single canonical
+        string used to key on-disk engine filenames.
+
+        Returns:
+            str: "int8" when ``quant_mode == "int8"``;
+                 "float16" when ``fp16_mode`` is True;
+                 "float32" otherwise.
+        """
+        if cls.quant_mode == "int8":
+            return "int8"
+        if cls.fp16_mode:
+            return "float16"
+        return "float32"
 
     @classmethod
     @torch.no_grad()
@@ -395,10 +414,12 @@ class WhisperTRTBuilder:
         x = torch.randn(1, 1, dims.n_text_state).cuda()
         xa = torch.randn(1, dims.n_audio_ctx, dims.n_audio_state).cuda()
         mask = torch.randn(dims.n_text_ctx, dims.n_text_ctx).cuda()
+        int8_mode = cls.quant_mode == "int8"
         engine = torch2trt.torch2trt(
             decoder_blocks_module,
             [x, xa, mask],
             use_onnx=True,
+            int8_mode=int8_mode,
             min_shapes=[
                 (1, 1, dims.n_text_state),
                 (1, 1, dims.n_audio_state),
@@ -417,7 +438,7 @@ class WhisperTRTBuilder:
             input_names=["x", "xa", "mask"],
             output_names=["output"],
             max_workspace_size=cls.max_workspace_size,
-            fp16_mode=cls.fp16_mode,
+            fp16_mode=cls.fp16_mode if not int8_mode else False,
             log_level=tensorrt.Logger.VERBOSE if cls.verbose else tensorrt.Logger.ERROR,
         )
         return engine
@@ -436,10 +457,12 @@ class WhisperTRTBuilder:
         n_frames = dims.n_audio_ctx * 2
         x = torch.randn(1, dims.n_mels, n_frames).cuda()
         positional_embedding = model_inst.encoder.positional_embedding.cuda().detach()
+        int8_mode = cls.quant_mode == "int8"
         engine = torch2trt.torch2trt(
             encoder_module,
             [x, positional_embedding],
             use_onnx=True,
+            int8_mode=int8_mode,
             min_shapes=[(1, dims.n_mels, 1), (1, dims.n_audio_state)],
             opt_shapes=[
                 (1, dims.n_mels, n_frames),
@@ -452,7 +475,7 @@ class WhisperTRTBuilder:
             input_names=["x", "positional_embedding"],
             output_names=["output"],
             max_workspace_size=cls.max_workspace_size,
-            fp16_mode=cls.fp16_mode,
+            fp16_mode=cls.fp16_mode if not int8_mode else False,
             log_level=tensorrt.Logger.VERBOSE if cls.verbose else tensorrt.Logger.ERROR,
         )
         return engine
@@ -643,6 +666,30 @@ MODEL_BUILDERS = {
 }
 
 
+def get_model_filename(name: str, quant_mode: str) -> str:
+    """
+    Returns the compute-type-aware filename for a given model and quantization mode.
+
+    Each distinct compute type (float32, float16, int8) produces a separate cached
+    engine file, preventing silent reuse of an engine built under a different precision.
+
+    Args:
+        name (str): The model name (e.g. "tiny", "base.en").
+        quant_mode (str): The quantization mode ("float32", "float16", or "int8").
+
+    Returns:
+        str: Filename with the quant mode embedded (e.g. "tiny_trt_float16.pth").
+
+    Raises:
+        RuntimeError: If ``name`` is not a recognised model name.
+    """
+    if name not in MODEL_FILENAMES:
+        raise RuntimeError(f"Model '{name}' is not supported by WhisperTRT.")
+    base = MODEL_FILENAMES[name]
+    stem, ext = os.path.splitext(base)
+    return f"{stem}_{quant_mode}{ext}"
+
+
 def load_trt_model(
     name: str,
     path: Optional[str] = None,
@@ -653,17 +700,21 @@ def load_trt_model(
     # print current precision settings
 
     logger.debug(
-        "Loading TRT model '%s' with fp16_mode=%s",
+        "Loading TRT model '%s' with compute_type=%s (quant_mode=%s, fp16_mode=%s)",
         name,
+        WhisperTRTBuilder.get_compute_type(),
+        WhisperTRTBuilder.quant_mode,
         WhisperTRTBuilder.fp16_mode,
     )
 
     if name not in MODEL_BUILDERS:
         raise RuntimeError(f"Model '{name}' is not supported by WhisperTRT.")
-    # determine on-disk path
+    # determine on-disk path — include quant_mode in filename to avoid silent
+    # reuse of an engine built under a different precision.
 
     if path is None:
-        path = os.path.join(get_cache_dir(), MODEL_FILENAMES[name])
+        filename = get_model_filename(name, WhisperTRTBuilder.get_compute_type())
+        path = os.path.join(get_cache_dir(), filename)
         make_cache_dir()
     builder = MODEL_BUILDERS[name]
     if not os.path.exists(path):
