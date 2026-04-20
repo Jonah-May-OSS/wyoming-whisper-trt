@@ -7,6 +7,6 @@ tensorrt_cu13_libs~=10.16.1.11
 tensorrt~=10.16.1.11
 packaging~=26.0
 onnx~=1.21.0
-onnxscript~=0.6.2
+onnxscript~=0.7.0
 onnx-graphsurgeon==0.6.1
 torch==2.11.0
