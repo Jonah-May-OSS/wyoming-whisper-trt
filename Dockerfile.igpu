@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
     apt-get update && apt-get install -y \
     python3-venv python3-pip libopenblas-dev \
     libcusparselt0 libcusparselt-dev \
-    && git clone --recursive https://github.com/Srafington/wyoming-whisper-trt \
+    && git clone --recursive https://github.com/JonahMMay/wyoming-whisper-trt \
     && cd wyoming-whisper-trt \
     && chmod +x ./script/setup \
     && wget -nv https://developer.download.nvidia.com/compute/redist/jp/v61/pytorch/torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl \
