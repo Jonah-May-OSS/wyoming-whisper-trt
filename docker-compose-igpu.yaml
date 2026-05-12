@@ -3,6 +3,8 @@ services:
     image: captnspdr/wyoming-whisper-trt:latest-igpu
     container_name: wyoming-whisper-trt
     restart: unless-stopped
+    ports:
+      - 10300:10300
     environment:
       MODEL:      "${MODEL:-base}"
       LANGUAGE:   "${LANGUAGE:-auto}"
@@ -15,5 +17,5 @@ services:
       DEBUG:      "${DEBUG:-false}"
       NVIDIA_VISIBLE_DEVICES:     all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
-    network_mode: host
+      NVIDIA_EMBEDED: True
     runtime: nvidia

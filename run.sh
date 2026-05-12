@@ -8,7 +8,7 @@ cd /usr/src/wyoming-whisper-trt
 if [ ! -d ".venv" ]; then
     echo "Virtual environment (.venv) not found. Running setup..."
     chmod +x script/setup
-    ./script/setup
+    ./script/setup --system_site_packages ${NVIDIA_EMBEDDED:-False}
 fi
 
 # Activate the Python virtual environment

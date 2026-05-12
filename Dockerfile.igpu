@@ -1,5 +1,5 @@
 # Use the base TensorRT image
-FROM nvcr.io/nvidia/tensorrt:26.02-py3-igpu
+FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0
 
 WORKDIR /usr/src
 
@@ -8,9 +8,11 @@ RUN apt-get update && apt-get install -y \
     python3-venv \
     ffmpeg \
     git \
-    && git clone --recursive https://github.com/JonahMMay/wyoming-whisper-trt \
+    && git clone --recursive https://github.com/Srafington/wyoming-whisper-trt \
     && cd wyoming-whisper-trt \
     && chmod +x ./script/setup \
+    && wget -nv https://developer.download.nvidia.com/compute/redist/jp/v61/pytorch/torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl \
+    && pip3 install --no-cache-dir torch-2.5.0a0+872d972e41*.whl \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /
