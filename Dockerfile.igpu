@@ -1,21 +1,23 @@
 # Use the base TensorRT image
 FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0
 
-WORKDIR /usr/src
+# Define the PyTorch precompiled wheel and its expected SHA256 hash as build arguments
+ARG TORCH_WHEEL=torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl
+ARG TORCH_WHEEL_SHA256=6f75fd2d2ef840ede1a90dbcf40a5458214bee26cc803fa510cda2e8978d972a
 
 # Update and install python3-venv, clone the repository, and run the setup script
 RUN apt-get update && apt-get install -y \
-    curl gnupg2 ffmpeg git && \
-    curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/sbsa/3bf863cc.pub | gpg --dearmor -o /usr/share/keyrings/nvidia-cuda.gpg && \
-    echo "deb [signed-by=/usr/share/keyrings/nvidia-cuda.gpg] https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/sbsa/ /" > /etc/apt/sources.list.d/cuda-sbsa.list && \
-    apt-get update && apt-get install -y \
+    curl gnupg2 ffmpeg git \
+    && curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/sbsa/3bf863cc.pub | apt-key add - \
+    && echo "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/sbsa/ /" > /etc/apt/sources.list.d/cuda-sbsa.list \
+    && apt-get update && apt-get install -y \
     python3-venv python3-pip libopenblas-dev \
     libcusparselt0 libcusparselt-dev \
-    && git clone --recursive https://github.com/JonahMMay/wyoming-whisper-trt \
     && cd wyoming-whisper-trt \
     && chmod +x ./script/setup \
-    && wget -nv https://developer.download.nvidia.com/compute/redist/jp/v61/pytorch/torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl \
-    && pip install --no-cache-dir torch-2.5.0a0+872d972e41*.whl \
+    && curl -fLo "${TORCH_WHEEL}" "https://developer.download.nvidia.com/compute/redist/jp/v61/pytorch/${TORCH_WHEEL}" \
+    && echo "${TORCH_WHEEL_SHA256}  ${TORCH_WHEEL}" | sha256sum -c - \
+    && pip install --no-cache-dir "./${TORCH_WHEEL}" \
     && pip install --upgrade pip setuptools wheel "numpy<2" packaging \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
