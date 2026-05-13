@@ -15,9 +15,9 @@ if [ ! -d ".venv" ]; then
     # with the versions specified in requirements.txt, and attempting to install them will cause conflicts and break the setup process.
         sed -i '/tensorrt/d;/torch/d' requirements.txt
     # Enable system site packages so VENV can access TensorRT and PyTorch installed on the system
-+       setup_args+=(--system_site_packages)
+       setup_args+=(--system_site_packages)
     fi
-+    ./script/setup "${setup_args[@]}"
+    ./script/setup "${setup_args[@]}"
 
 fi
 
