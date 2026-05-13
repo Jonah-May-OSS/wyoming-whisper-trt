@@ -19,5 +19,5 @@ services:
       DEBUG:      "${DEBUG:-false}"
       NVIDIA_VISIBLE_DEVICES:     all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
-      NVIDIA_EMBEDED: "True"
+      NVIDIA_EMBEDED: "true"
     runtime: nvidia

@@ -6,8 +6,8 @@ WORKDIR /usr/src
 # Update and install python3-venv, clone the repository, and run the setup script
 RUN apt-get update && apt-get install -y \
     curl gnupg2 ffmpeg git && \
-    curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/sbsa/3bf863cc.pub | apt-key add - && \
-    echo "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/sbsa/ /" > /etc/apt/sources.list.d/cuda-sbsa.list && \
+    curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/sbsa/3bf863cc.pub | gpg --dearmor -o /usr/share/keyrings/nvidia-cuda.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/nvidia-cuda.gpg] https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/sbsa/ /" > /etc/apt/sources.list.d/cuda-sbsa.list && \
     apt-get update && apt-get install -y \
     python3-venv python3-pip libopenblas-dev \
     libcusparselt0 libcusparselt-dev \

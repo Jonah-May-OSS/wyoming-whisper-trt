@@ -8,13 +8,16 @@ cd /usr/src/wyoming-whisper-trt
 if [ ! -d ".venv" ]; then
     echo "Virtual environment (.venv) not found. Running setup..."
     chmod +x script/setup
-    if [ "${NVIDIA_EMBEDDED}" = "true" ]; then
+    setup_args=()
+    if [ "${NVIDIA_EMBEDDED:-false}" = "true" ]; then
     # Remove tensorrt and torch from requirements.txt if NVIDIA_EMBEDDED is true
     # This is necessary because the torch and tensorrt packages installed on NVIDIA embedded devices are not compatible 
     # with the versions specified in requirements.txt, and attempting to install them will cause conflicts and break the setup process.
         sed -i '/tensorrt/d;/torch/d' requirements.txt
+    # Enable system site packages so VENV can access TensorRT and PyTorch installed on the system
++       setup_args+=(--system_site_packages)
     fi
-    python ./script/setup ${NVIDIA_EMBEDDED:+--system_site_packages}
++    ./script/setup "${setup_args[@]}"
 
 fi
 
