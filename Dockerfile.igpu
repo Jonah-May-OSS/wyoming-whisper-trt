@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y \
     && apt-get update && apt-get install -y \
     python3-venv python3-pip libopenblas-dev \
     libcusparselt0 libcusparselt-dev \
+    && git submodule update --init --recursive \
     && chmod +x ./script/setup \
     && curl -fLo "${TORCH_WHEEL}" "https://developer.download.nvidia.com/compute/redist/jp/v61/pytorch/${TORCH_WHEEL}" \
     && echo "${TORCH_WHEEL_SHA256}  ${TORCH_WHEEL}" | sha256sum -c - \

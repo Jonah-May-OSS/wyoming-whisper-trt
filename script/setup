@@ -12,10 +12,12 @@ _TORCH2TRT_DIR = _PROGRAM_DIR / "torch2trt"  # Update this path if torch2trt is 
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--dev", action="store_true", help="Install dev requirements")
-parser.add_argument("--system_site_packages", type=bool, help="Include system site packages in the virtual environment", default=False)
+parser.add_argument("--system_site_packages", action="store_true", help="Include system site packages in the virtual environment", default=False)
 args = parser.parse_args()
 
 # Create virtual environment
+if args.system_site_packages:
+    print("Creating virtual environment with access to system site packages...")
 builder = venv.EnvBuilder(with_pip=True, system_site_packages=args.system_site_packages)
 context = builder.ensure_directories(_VENV_DIR)
 builder.create(_VENV_DIR)
