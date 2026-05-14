@@ -6,7 +6,7 @@ ARG TORCH_WHEEL=torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarc
 ARG TORCH_WHEEL_SHA256=6f75fd2d2ef840ede1a90dbcf40a5458214bee26cc803fa510cda2e8978d972a
 
 WORKDIR /usr/src/wyoming-whisper-trt
-COPY . /usr/src/wyoming-whisper-trt
+COPY . ./
 
 # Update and install python3-venv, clone the repository, and run the setup script
 RUN apt-get update && apt-get install -y \
@@ -16,7 +16,6 @@ RUN apt-get update && apt-get install -y \
     && apt-get update && apt-get install -y \
     python3-venv python3-pip libopenblas-dev \
     libcusparselt0 libcusparselt-dev \
-    && cd wyoming-whisper-trt \
     && chmod +x ./script/setup \
     && curl -fLo "${TORCH_WHEEL}" "https://developer.download.nvidia.com/compute/redist/jp/v61/pytorch/${TORCH_WHEEL}" \
     && echo "${TORCH_WHEEL_SHA256}  ${TORCH_WHEEL}" | sha256sum -c - \
