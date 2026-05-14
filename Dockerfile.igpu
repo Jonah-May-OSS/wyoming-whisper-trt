@@ -5,6 +5,9 @@ FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0
 ARG TORCH_WHEEL=torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl
 ARG TORCH_WHEEL_SHA256=6f75fd2d2ef840ede1a90dbcf40a5458214bee26cc803fa510cda2e8978d972a
 
+WORKDIR /usr/src/wyoming-whisper-trt
+COPY . /usr/src/wyoming-whisper-trt
+
 # Update and install python3-venv, clone the repository, and run the setup script
 RUN apt-get update && apt-get install -y \
     curl gnupg2 ffmpeg git \
