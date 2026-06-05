@@ -7,8 +7,9 @@ from pathlib import Path
 
 import requests
 from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util import Retry
 from tqdm import tqdm
+from urllib3.util import Retry
+
 
 # Configure logger
 
