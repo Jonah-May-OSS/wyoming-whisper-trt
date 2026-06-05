@@ -10,7 +10,6 @@ from requests.adapters import HTTPAdapter
 from tqdm import tqdm
 from urllib3.util import Retry
 
-
 # Configure logger
 
 logger = logging.getLogger(__name__)
