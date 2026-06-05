@@ -6,8 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import requests
-from requests.adapters import HTTPAdapter, Retry
+from requests.adapters import HTTPAdapter
 from tqdm import tqdm
+from urllib3.util import Retry
 
 # Configure logger
 
