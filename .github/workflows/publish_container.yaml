@@ -92,53 +92,6 @@ jobs:
         with:
           images: captnspdr/wyoming-whisper-trt
 
-      - name: Prepare AMD64 Tags
-        id: prepare-amd64-tags
-        run: |
-          TAGS="${{ steps.meta.outputs.tags }}"
-          echo "Original AMD64 TAGS: $TAGS"
-
-          # We'll split by space and append '-amd64' to each
-          AMD64_TAGS=""
-          for T in $TAGS; do
-            AMD64_TAGS="${AMD64_TAGS}\n${T}-amd64"
-          done
-
-          # Clean up any leading blank line
-          AMD64_TAGS="$(echo -e "$AMD64_TAGS" | sed '/^$/d')"
-
-          echo "Final AMD64 tags (multi-line):"
-          echo "$AMD64_TAGS"
-
-          # -- The important part --
-          # Use the '<<EOF' syntax so GitHub Actions treats the entire block as ONE output variable
-          echo "amd64_tags<<EOF" >> $GITHUB_OUTPUT
-          echo "$AMD64_TAGS" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Prepare ARM64 Tags
-        id: prepare-arm64-tags
-        shell: bash
-        run: |
-          TAGS="${{ steps.meta.outputs.tags }}"
-          echo "Original ARM64 TAGS: $TAGS"
-
-          ARM64_TAGS=""
-          for T in $TAGS; do
-            ARM64_TAGS="${ARM64_TAGS}\n${T}-arm64"
-          done
-
-          # Remove any blank leading line
-          ARM64_TAGS="$(echo -e "$ARM64_TAGS" | sed '/^$/d')"
-
-          echo "Final ARM64 tags (multi-line):"
-          echo "$ARM64_TAGS"
-
-          # Use the here-doc style to create a multi-line output
-          echo "arm64_tags<<EOF" >> $GITHUB_OUTPUT
-          echo "$ARM64_TAGS" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
       - name: Prepare iGPU Tags
         id: prepare-igpu-tags
         shell: bash
@@ -161,27 +114,16 @@ jobs:
           echo "$IGPU_TAGS" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Build and Push AMD64 dGPU Image
-        id: push-amd64
+      - name: Build and Push dGPU Image (multi-arch)
+        id: push-dgpu
         uses: docker/build-push-action@83bfd93ab480705a7b99a2ed02765137f5ab55ba
         with:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ${{ steps.prepare-amd64-tags.outputs.amd64_tags }}
-          labels: ${{ steps.meta.outputs.labels }}-amd64
-          platforms: linux/amd64
-
-      - name: Build and Push ARM64 dGPU Image
-        id: push-arm64
-        uses: docker/build-push-action@83bfd93ab480705a7b99a2ed02765137f5ab55ba
-        with:
-          context: .
-          file: ./Dockerfile.arm64
-          push: true
-          tags: ${{ steps.prepare-arm64-tags.outputs.arm64_tags }}
-          labels: ${{ steps.meta.outputs.labels }}-arm64
-          platforms: linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
 
       - name: Build and Push ARM64 iGPU Image
         id: push-arm64-igpu

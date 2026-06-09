@@ -66,39 +66,11 @@ NOTE: Only the official OpenAI models from HuggingFace are currently supported. 
 2. Install and configure the [Nvidia Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
 
 ### Docker Compose (recommended)
-For AMD64 with discrete GPUs:
+For discrete GPUs (AMD64 or ARM64):
 ```
 services:
   wyoming-whisper-trt:
-    image: captnspdr/wyoming-whisper-trt:latest-amd64
-    container_name: wyoming-whisper-trt
-    ports:
-      - 10300:10300
-    restart: unless-stopped
-    environment:
-      MODEL:      "${MODEL:-base}"
-      LANGUAGE:   "${LANGUAGE:-auto}"
-      URI:        "${URI:-tcp://0.0.0.0:10300}"
-      DATA_DIR:   "${DATA_DIR:-/data}"
-      COMPUTE_TYPE: "${COMPUTE_TYPE:-float16}"
-      DEVICE:     "${DEVICE:-cuda}"
-      BEAM_SIZE:  "${BEAM_SIZE:-5}"
-      STREAMING:  "${STREAMING:-false}"
-      DEBUG:      "${DEBUG:-false}"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-```
-
-For ARM64 with discrete GPUs:
-```
-services:
-  wyoming-whisper-trt:
-    image: captnspdr/wyoming-whisper-trt:latest-arm64
+    image: captnspdr/wyoming-whisper-trt:latest
     container_name: wyoming-whisper-trt
     ports:
       - 10300:10300
@@ -152,7 +124,7 @@ services:
 2. Browse to the repository root folder
 3. Run the following command based on your platform:
    
-For AMD64 with dGPU:
+For discrete GPUs (AMD64 or ARM64):
 
 ```bash
 docker run \
@@ -164,22 +136,7 @@ docker run \
   -e LANGUAGE=auto \                          # default transcription language (`auto` = detect)
   -e COMPUTE_TYPE=float16 \                   # float16 or float32
   -e DEVICE=cuda \                            # `cuda` or `cpu`
-  captnspdr/wyoming-whisper-trt:latest-amd64
-```
-
-For ARM64 with dGPU:
-
-```bash
-docker run \
-  --gpus all \                                # expose all NVIDIA GPUs
-  --name wyoming-whisper-trt \                # give the container a name
-  -d \                                        # run in detached mode
-  -p 10300:10300 \                            # map port 10300 → 10300
-  -e MODEL=base \                             # which model to load (tiny, small, base, etc.)
-  -e LANGUAGE=auto \                          # default transcription language (`auto` = detect)
-  -e COMPUTE_TYPE=float16 \                   # float16 or float32
-  -e DEVICE=cuda \                            # `cuda` or `cpu`
-  captnspdr/wyoming-whisper-trt:latest-arm64
+  captnspdr/wyoming-whisper-trt:latest
 ```
 
 For ARM64 with iGPU:

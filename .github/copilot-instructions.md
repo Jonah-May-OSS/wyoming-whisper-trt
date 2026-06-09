@@ -308,7 +308,7 @@ pytest tests/test_faster_whisper.py::test_faster_whisper -v
 
 **Known Failure Mode**: In restricted network environments, pip install may fail with "Read timed out" errors. In such cases:
 - Use Docker builds which have better network handling
-- Use pre-built container images: `captnspdr/wyoming-whisper-trt:latest-amd64`
+- Use pre-built container images: `captnspdr/wyoming-whisper-trt:latest`
 - Documentation note: Full build validation was limited in restricted environments due to PyPI connectivity issues
 
 **Network Timeout Errors and Current Status**:
@@ -413,7 +413,7 @@ The project is designed to run in Docker containers with NVIDIA GPU support:
 # docker-compose.yaml example
 services:
   wyoming-whisper-trt:
-    image: captnspdr/wyoming-whisper-trt:latest-amd64
+    image: captnspdr/wyoming-whisper-trt:latest
     environment:
       MODEL: "base"
       LANGUAGE: "auto" 
