@@ -136,10 +136,20 @@ jobs:
 
           # Loop to check if the server is listening
           while ! is_server_listening; do
+            # Fail fast if the server process died (e.g. a native segfault)
+            # instead of waiting out the full timeout.
+            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+              STATUS=0
+              wait "$SERVER_PID" || STATUS=$?
+              echo "Server process exited prematurely (status $STATUS) before listening."
+              echo "----- server.log -----"
+              cat server.log || true
+              exit 1
+            fi
             if [ $ELAPSED -ge $TIMEOUT ]; then
               echo "Server failed to start within $TIMEOUT seconds."
-              kill $SERVER_PID
-              exit 1  # Exit with failure
+              kill "$SERVER_PID" 2>/dev/null || true
+              exit 1
             fi
             echo "Waiting for server to start... ($ELAPSED/$TIMEOUT seconds elapsed)"
             sleep $INTERVAL
