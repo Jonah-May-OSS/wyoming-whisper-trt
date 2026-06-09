@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y \
     python3-venv \
     ffmpeg \
     git \
-    && git clone --recursive https://github.com/JonahMMay/wyoming-whisper-trt \
+    && git clone --recursive https://github.com/Jonah-May-OSS/wyoming-whisper-trt \
     && cd wyoming-whisper-trt \
     && chmod +x ./script/setup \
     && ./script/setup \
