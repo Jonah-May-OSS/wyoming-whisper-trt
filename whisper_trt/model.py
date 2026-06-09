@@ -32,12 +32,6 @@ import numpy as np
 import tensorrt
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
-# Apply onnx.helper compatibility shims before torch2trt / onnx-graphsurgeon
-# are imported (see whisper_trt/_onnx_compat.py for details).
-from . import _onnx_compat  # noqa: F401
-
 import whisper.audio
 from whisper import load_model
 from whisper.model import LayerNorm, ModelDimensions, Tensor
@@ -45,6 +39,9 @@ from whisper.tokenizer import TO_LANGUAGE_CODE, Tokenizer
 
 import torch2trt
 
+# Apply onnx.helper compatibility shims before torch2trt / onnx-graphsurgeon
+# are imported (see whisper_trt/_onnx_compat.py for details).
+from . import _onnx_compat  # noqa: F401
 from .__version__ import __version__
 from .cache import get_cache_dir, make_cache_dir
 
