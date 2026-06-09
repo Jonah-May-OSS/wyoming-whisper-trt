@@ -31,7 +31,10 @@ setup(
     author_email="jonah@mayfamily.me",
     license="MIT",
     packages=setuptools.find_packages(),
-    package_data={module_name: [str(p.relative_to(module_dir)) for p in data_files]},
+    package_data={
+        module_name: [str(p.relative_to(module_dir)) for p in data_files],
+        "whisper_trt": ["calibration/*.wav"],
+    },
     install_requires=requirements,
     classifiers=[
         "Development Status :: 3 - Alpha",

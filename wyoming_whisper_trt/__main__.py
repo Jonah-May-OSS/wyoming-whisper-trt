@@ -252,7 +252,11 @@ async def main() -> None:
         "--compute-type",
         default="float16",
         choices=["float32", "float16", "int8"],
-        help="Compute type (float32, float16, int8)",
+        help=(
+            "Compute type (float32, float16, int8). int8 is experimental and "
+            "mixed-precision: the encoder runs INT8 (calibrated on a bundled "
+            "speech clip) and the decoder runs FP16."
+        ),
     )
     parser.add_argument(
         "--beam-size",
@@ -304,6 +308,12 @@ async def main() -> None:
     # Set compute-type
     WhisperTRTBuilder.quant_mode = args.compute_type
     WhisperTRTBuilder.fp16_mode = args.compute_type == "float16"
+    if args.compute_type == "int8":
+        logger.warning(
+            "int8 is experimental: the encoder is quantized to INT8 (calibrated "
+            "on a bundled speech clip) and the decoder runs FP16. Accuracy can "
+            "differ from float16; benefits are largest on medium/large models."
+        )
 
     # Set download directory to first data directory if not specified
     if not args.download_dir:

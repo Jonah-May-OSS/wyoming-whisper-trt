@@ -21,9 +21,11 @@
 
 """TensorRT-backed Whisper model and model-builder utilities."""
 
+import importlib.resources
 import logging
 import os
 import time
+import wave
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from typing import Any, cast
@@ -90,6 +92,78 @@ def _trt_log_level(verbose: bool) -> int:
     if logger_cls is None:
         raise RuntimeError("tensorrt.Logger is unavailable")
     return logger_cls.VERBOSE if verbose else logger_cls.ERROR
+
+
+# Directory of bundled mono 16 kHz speech clips used to calibrate INT8
+# activation ranges for the audio encoder. Calibrating on real speech (rather
+# than the random trace inputs torch2trt falls back to) is what makes INT8
+# produce usable scales. Drop additional ``*.wav`` files in here to widen
+# acoustic coverage — the more diverse speakers / recording conditions, the
+# better the calibration. Clips must be mono, 16 kHz, 16-bit PCM.
+_CALIBRATION_DIR = "calibration"
+
+
+def _load_calibration_clips() -> list[np.ndarray]:
+    """Load every bundled INT8-calibration clip as mono float32 PCM.
+
+    Reads all ``*.wav`` files under :data:`_CALIBRATION_DIR` in sorted order so
+    the calibration set is deterministic.
+    """
+    root = importlib.resources.files("whisper_trt").joinpath(_CALIBRATION_DIR)
+    clips: list[np.ndarray] = []
+    try:
+        entries = sorted(
+            (e for e in root.iterdir() if e.name.lower().endswith(".wav")),
+            key=lambda e: e.name,
+        )
+        for entry in entries:
+            with (
+                importlib.resources.as_file(entry) as clip_path,
+                wave.open(str(clip_path), "rb") as clip,
+            ):
+                frames = clip.readframes(clip.getnframes())
+            clips.append(np.frombuffer(frames, dtype=np.int16).astype(np.float32))
+    except (FileNotFoundError, OSError) as exc:
+        raise RuntimeError(
+            "INT8 calibration clips are missing; cannot build an int8 engine. "
+            f"Expected packaged resource directory 'whisper_trt/{_CALIBRATION_DIR}'."
+        ) from exc
+    if not clips:
+        raise RuntimeError(
+            "No INT8 calibration clips found; cannot build an int8 engine. "
+            f"Add one or more 16 kHz mono WAVs under 'whisper_trt/{_CALIBRATION_DIR}'."
+        )
+    return [c / 32768.0 for c in clips]
+
+
+def _encoder_int8_calib_dataset(
+    n_mels: int, n_frames: int, positional_embedding: torch.Tensor
+) -> list[list[torch.Tensor]]:
+    """Build a representative INT8 calibration set for the audio encoder.
+
+    Whisper always pads audio to a fixed 30 s window before encoding, so for
+    each bundled clip we derive two real-speech mel spectrograms: the utterance
+    at the start of the window (the common case) and the clip looped to fill the
+    window (continuous speech). Acoustic diversity comes from the set of clips in
+    :data:`_CALIBRATION_DIR`. Each item mirrors the encoder's
+    ``[x, positional_embedding]`` input signature.
+    """
+    window = whisper.audio.N_SAMPLES
+    audios: list[np.ndarray] = []
+    for pcm in _load_calibration_clips():
+        audios.append(pcm)  # utterance at window start
+        reps = int(np.ceil(window / len(pcm)))
+        audios.append(np.tile(pcm, reps)[:window])  # looped to fill the window
+
+    dataset: list[list[torch.Tensor]] = []
+    for audio in audios:
+        mel = whisper.audio.log_mel_spectrogram(
+            torch.from_numpy(np.ascontiguousarray(audio, dtype=np.float32)),
+            n_mels,
+        )
+        mel = whisper.audio.pad_or_trim(mel, n_frames).unsqueeze(0).contiguous().cuda()
+        dataset.append([mel, positional_embedding])
+    return dataset
 
 
 @dataclass
@@ -477,7 +551,9 @@ class WhisperTRTBuilder:
         """Return the effective compute type based on builder configuration.
 
         Reconciles ``quant_mode`` and ``fp16_mode`` into a single canonical
-        string used to key on-disk engine filenames.
+        string used to key on-disk engine filenames. Note that "int8" denotes a
+        mixed-precision build (INT8 encoder + FP16 decoder), not a fully INT8
+        model — see ``build_text_decoder_engine``.
 
         Returns:
             str: "int8" when ``quant_mode == "int8"``;
@@ -508,12 +584,19 @@ class WhisperTRTBuilder:
         x = torch.randn(1, 1, dims.n_text_state).cuda()
         xa = torch.randn(1, dims.n_audio_ctx, dims.n_audio_state).cuda()
         mask = torch.randn(dims.n_text_ctx, dims.n_text_ctx).cuda()
-        int8_mode = cls.quant_mode == "int8"
+        # The decoder stays in FP16 even when INT8 is requested (mixed precision).
+        # Its inputs are intermediate activations — decoder hidden states and the
+        # encoder's cross-attention features — that we have no representative
+        # calibration set for, so quantizing it would degrade accuracy for little
+        # gain (the decoder is latency-bound by its autoregressive loop, not
+        # FLOP-bound). INT8 is applied to the encoder only; see
+        # build_audio_encoder_engine.
+        decoder_fp16 = cls.fp16_mode or cls.quant_mode == "int8"
         return _torch2trt_convert(
             decoder_blocks_module,
             [x, xa, mask],
             use_onnx=True,
-            int8_mode=int8_mode,
+            int8_mode=False,
             min_shapes=[
                 (1, 1, dims.n_text_state),
                 (1, 1, dims.n_audio_state),
@@ -532,7 +615,7 @@ class WhisperTRTBuilder:
             input_names=["x", "xa", "mask"],
             output_names=["output"],
             max_workspace_size=cls.max_workspace_size,
-            fp16_mode=cls.fp16_mode if not int8_mode else False,
+            fp16_mode=decoder_fp16,
             log_level=_trt_log_level(cls.verbose),
         )
 
@@ -558,11 +641,19 @@ class WhisperTRTBuilder:
             positional_embedding = positional_embedding.cuda()
         positional_embedding = positional_embedding.detach()
         int8_mode = cls.quant_mode == "int8"
+        # Calibrate INT8 activation ranges on real speech mels rather than
+        # letting torch2trt fall back to the random trace inputs.
+        int8_calib_dataset = (
+            _encoder_int8_calib_dataset(dims.n_mels, n_frames, positional_embedding)
+            if int8_mode
+            else None
+        )
         return _torch2trt_convert(
             encoder_module,
             [x, positional_embedding],
             use_onnx=True,
             int8_mode=int8_mode,
+            int8_calib_dataset=int8_calib_dataset,
             min_shapes=[(1, dims.n_mels, 1), (1, dims.n_audio_state)],
             opt_shapes=[
                 (1, dims.n_mels, n_frames),
@@ -575,7 +666,10 @@ class WhisperTRTBuilder:
             input_names=["x", "positional_embedding"],
             output_names=["output"],
             max_workspace_size=cls.max_workspace_size,
-            fp16_mode=cls.fp16_mode if not int8_mode else False,
+            # Allow FP16 fallback alongside INT8 so TensorRT can keep
+            # precision-sensitive layers in FP16 (mixed precision) instead of
+            # forcing every layer to INT8.
+            fp16_mode=cls.fp16_mode or int8_mode,
             log_level=_trt_log_level(cls.verbose),
         )
 
