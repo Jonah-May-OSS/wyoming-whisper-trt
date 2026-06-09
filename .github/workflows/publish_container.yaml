@@ -38,7 +38,7 @@ jobs:
           sudo apt-get install -y nvidia-open
       
       - name: Install CUDA Toolkit
-        uses: Jimver/cuda-toolkit@b6fc3a9f3f15256d9d94ffe1254f9c5a2565cde6
+        uses: Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76
         with:
           use-github-cache: false
 
@@ -61,7 +61,7 @@ jobs:
           sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@6804d313191b81cfc5feb5065848250370954232
+        uses: docker/setup-qemu-action@f4e8deed0c3c26542279f4042c0e1d059cbf012d
         with:
           platforms: all
 
@@ -78,17 +78,17 @@ jobs:
           sudo systemctl restart docker
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@172dff065fb2e54aaed577fd667975cd412819fb
+        uses: docker/setup-buildx-action@21162887f0d6e25b4e8eafb0cf44cf9bf7f6acd3
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@a0d57b8e43b6ef1cca20559d68cec2227e63fccd
+        uses: docker/login-action@ba754150c9dbbaa912ae0ac3cfba43f84195cef2
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
-        uses: docker/metadata-action@4378dc6be7f72231dfe78ac7e0364a44f1c9f54b
+        uses: docker/metadata-action@c3b064c6d7c32446d6bc214ea075f1caad2de35a
         with:
           images: captnspdr/wyoming-whisper-trt
 
@@ -163,7 +163,7 @@ jobs:
 
       - name: Build and Push AMD64 dGPU Image
         id: push-amd64
-        uses: docker/build-push-action@b66d8774c665b789105b440514f0c97e6f19b06f
+        uses: docker/build-push-action@83bfd93ab480705a7b99a2ed02765137f5ab55ba
         with:
           context: .
           file: ./Dockerfile
@@ -174,7 +174,7 @@ jobs:
 
       - name: Build and Push ARM64 dGPU Image
         id: push-arm64
-        uses: docker/build-push-action@b66d8774c665b789105b440514f0c97e6f19b06f
+        uses: docker/build-push-action@83bfd93ab480705a7b99a2ed02765137f5ab55ba
         with:
           context: .
           file: ./Dockerfile.arm64
@@ -185,7 +185,7 @@ jobs:
 
       - name: Build and Push ARM64 iGPU Image
         id: push-arm64-igpu
-        uses: docker/build-push-action@b66d8774c665b789105b440514f0c97e6f19b06f
+        uses: docker/build-push-action@83bfd93ab480705a7b99a2ed02765137f5ab55ba
         with:
           context: .
           file: ./Dockerfile.igpu
