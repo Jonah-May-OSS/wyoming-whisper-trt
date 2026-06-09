@@ -11,11 +11,10 @@
 #
 # [License text continues...]
 
-
-from pathlib import Path
-from typing import Optional
+"""Cache directory utilities for Whisper TRT artifacts."""
 
 import logging
+from pathlib import Path
 
 # Configure logger
 
@@ -24,7 +23,7 @@ logger.addHandler(logging.NullHandler())
 
 # Initialize cache directory
 
-_CACHE_DIR = Path.home() / ".cache" / "whisper_trt"
+_CACHE_STATE = {"dir": Path.home() / ".cache" / "whisper_trt"}
 
 
 def get_cache_dir() -> Path:
@@ -34,8 +33,9 @@ def get_cache_dir() -> Path:
     Returns:
         Path: The current cache directory.
     """
-    logger.debug(f"Retrieving cache directory: {_CACHE_DIR}")
-    return _CACHE_DIR
+    cache_dir = _CACHE_STATE["dir"]
+    logger.debug("Retrieving cache directory: %s", cache_dir)
+    return cache_dir
 
 
 def make_cache_dir() -> None:
@@ -45,15 +45,16 @@ def make_cache_dir() -> None:
     Raises:
         RuntimeError: If the cache directory cannot be created.
     """
+    cache_dir = get_cache_dir()
     try:
-        if not _CACHE_DIR.exists():
-            _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Created cache directory at: {_CACHE_DIR}")
+        if not cache_dir.exists():
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            logger.info("Created cache directory at: %s", cache_dir)
         else:
-            logger.debug(f"Cache directory already exists at: {_CACHE_DIR}")
-    except Exception as e:
-        logger.error(f"Failed to create cache directory at {_CACHE_DIR}: {e}")
-        raise RuntimeError(f"Could not create cache directory at {_CACHE_DIR}") from e
+            logger.debug("Cache directory already exists at: %s", cache_dir)
+    except OSError as err:
+        logger.error("Failed to create cache directory at %s: %s", cache_dir, err)
+        raise RuntimeError(f"Could not create cache directory at {cache_dir}") from err
 
 
 def set_cache_dir(path: str) -> None:
@@ -67,25 +68,21 @@ def set_cache_dir(path: str) -> None:
         RuntimeError: If the new cache directory cannot be created.
         TypeError: If the provided path is not a string.
     """
-    global _CACHE_DIR
-
-    if not isinstance(path, str):
-        error_msg = "The 'path' parameter must be a string."
-        logger.error(error_msg)
-        raise TypeError(error_msg)
     new_cache_dir = Path(path).expanduser().resolve()
-    logger.debug(f"Attempting to set new cache directory to: {new_cache_dir}")
+    logger.debug("Attempting to set new cache directory to: %s", new_cache_dir)
 
     try:
         if not new_cache_dir.exists():
             new_cache_dir.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Created new cache directory at: {new_cache_dir}")
+            logger.info("Created new cache directory at: %s", new_cache_dir)
         else:
-            logger.debug(f"New cache directory already exists at: {new_cache_dir}")
-    except Exception as e:
-        logger.error(f"Failed to create new cache directory at {new_cache_dir}: {e}")
+            logger.debug("New cache directory already exists at: %s", new_cache_dir)
+    except OSError as err:
+        logger.error(
+            "Failed to create new cache directory at %s: %s", new_cache_dir, err
+        )
         raise RuntimeError(
             f"Could not create new cache directory at {new_cache_dir}"
-        ) from e
-    _CACHE_DIR = new_cache_dir
-    logger.info(f"Cache directory successfully set to: {_CACHE_DIR}")
+        ) from err
+    _CACHE_STATE["dir"] = new_cache_dir
+    logger.info("Cache directory successfully set to: %s", _CACHE_STATE["dir"])

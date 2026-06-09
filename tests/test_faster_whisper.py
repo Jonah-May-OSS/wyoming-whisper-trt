@@ -17,6 +17,7 @@ _DIR = Path(__file__).parent
 _PROGRAM_DIR = _DIR.parent
 _LOCAL_DIR = _PROGRAM_DIR / "local"
 _SAMPLES_PER_CHUNK = 1024
+_INFO_TIMEOUT = 15
 
 # Need to give time for the model to download
 
@@ -24,6 +25,10 @@ _TRANSCRIBE_TIMEOUT = 60
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="wyoming_faster_whisper stdio transport is unreliable on Windows",
+)
 async def test_faster_whisper() -> None:
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
@@ -47,7 +52,9 @@ async def test_faster_whisper() -> None:
 
     await async_write_event(Describe().event(), proc.stdin)
     while True:
-        event = await asyncio.wait_for(async_read_event(proc.stdout), timeout=1)
+        event = await asyncio.wait_for(
+            async_read_event(proc.stdout), timeout=_INFO_TIMEOUT
+        )
         assert event is not None
 
         if not Info.is_type(event.type):

@@ -1,7 +1,8 @@
 services:
   wyoming-whisper-trt:
-    context: .
-    build: Dockerfile.igpu
+    build: 
+      context: .
+      dockerfile: Dockerfile.igpu
     container_name: wyoming-whisper-trt
     ports:
       - 10300:10300
@@ -18,5 +19,5 @@ services:
       DEBUG:      "${DEBUG:-false}"
       NVIDIA_VISIBLE_DEVICES:     all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
-    network_mode: host
+      NVIDIA_EMBEDDED: "true"
     runtime: nvidia

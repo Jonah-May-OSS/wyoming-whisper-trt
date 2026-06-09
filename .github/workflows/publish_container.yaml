@@ -38,7 +38,7 @@ jobs:
           sudo apt-get install -y nvidia-open
       
       - name: Install CUDA Toolkit
-        uses: Jimver/cuda-toolkit@b6fc3a9f3f15256d9d94ffe1254f9c5a2565cde6
+        uses: Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76
         with:
           use-github-cache: false
 
@@ -61,7 +61,7 @@ jobs:
           sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@6804d313191b81cfc5feb5065848250370954232
+        uses: docker/setup-qemu-action@f4e8deed0c3c26542279f4042c0e1d059cbf012d
         with:
           platforms: all
 
@@ -78,66 +78,19 @@ jobs:
           sudo systemctl restart docker
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@172dff065fb2e54aaed577fd667975cd412819fb
+        uses: docker/setup-buildx-action@21162887f0d6e25b4e8eafb0cf44cf9bf7f6acd3
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@a0d57b8e43b6ef1cca20559d68cec2227e63fccd
+        uses: docker/login-action@ba754150c9dbbaa912ae0ac3cfba43f84195cef2
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
-        uses: docker/metadata-action@4378dc6be7f72231dfe78ac7e0364a44f1c9f54b
+        uses: docker/metadata-action@c3b064c6d7c32446d6bc214ea075f1caad2de35a
         with:
           images: captnspdr/wyoming-whisper-trt
-
-      - name: Prepare AMD64 Tags
-        id: prepare-amd64-tags
-        run: |
-          TAGS="${{ steps.meta.outputs.tags }}"
-          echo "Original AMD64 TAGS: $TAGS"
-
-          # We'll split by space and append '-amd64' to each
-          AMD64_TAGS=""
-          for T in $TAGS; do
-            AMD64_TAGS="${AMD64_TAGS}\n${T}-amd64"
-          done
-
-          # Clean up any leading blank line
-          AMD64_TAGS="$(echo -e "$AMD64_TAGS" | sed '/^$/d')"
-
-          echo "Final AMD64 tags (multi-line):"
-          echo "$AMD64_TAGS"
-
-          # -- The important part --
-          # Use the '<<EOF' syntax so GitHub Actions treats the entire block as ONE output variable
-          echo "amd64_tags<<EOF" >> $GITHUB_OUTPUT
-          echo "$AMD64_TAGS" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Prepare ARM64 Tags
-        id: prepare-arm64-tags
-        shell: bash
-        run: |
-          TAGS="${{ steps.meta.outputs.tags }}"
-          echo "Original ARM64 TAGS: $TAGS"
-
-          ARM64_TAGS=""
-          for T in $TAGS; do
-            ARM64_TAGS="${ARM64_TAGS}\n${T}-arm64"
-          done
-
-          # Remove any blank leading line
-          ARM64_TAGS="$(echo -e "$ARM64_TAGS" | sed '/^$/d')"
-
-          echo "Final ARM64 tags (multi-line):"
-          echo "$ARM64_TAGS"
-
-          # Use the here-doc style to create a multi-line output
-          echo "arm64_tags<<EOF" >> $GITHUB_OUTPUT
-          echo "$ARM64_TAGS" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Prepare iGPU Tags
         id: prepare-igpu-tags
@@ -161,31 +114,20 @@ jobs:
           echo "$IGPU_TAGS" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Build and Push AMD64 dGPU Image
-        id: push-amd64
-        uses: docker/build-push-action@b66d8774c665b789105b440514f0c97e6f19b06f
+      - name: Build and Push dGPU Image (multi-arch)
+        id: push-dgpu
+        uses: docker/build-push-action@83bfd93ab480705a7b99a2ed02765137f5ab55ba
         with:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ${{ steps.prepare-amd64-tags.outputs.amd64_tags }}
-          labels: ${{ steps.meta.outputs.labels }}-amd64
-          platforms: linux/amd64
-
-      - name: Build and Push ARM64 dGPU Image
-        id: push-arm64
-        uses: docker/build-push-action@b66d8774c665b789105b440514f0c97e6f19b06f
-        with:
-          context: .
-          file: ./Dockerfile.arm64
-          push: true
-          tags: ${{ steps.prepare-arm64-tags.outputs.arm64_tags }}
-          labels: ${{ steps.meta.outputs.labels }}-arm64
-          platforms: linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
 
       - name: Build and Push ARM64 iGPU Image
         id: push-arm64-igpu
-        uses: docker/build-push-action@b66d8774c665b789105b440514f0c97e6f19b06f
+        uses: docker/build-push-action@83bfd93ab480705a7b99a2ed02765137f5ab55ba
         with:
           context: .
           file: ./Dockerfile.igpu

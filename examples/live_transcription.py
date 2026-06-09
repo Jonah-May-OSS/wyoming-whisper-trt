@@ -20,42 +20,63 @@
 # DEALINGS IN THE SOFTWARE.
 
 
-import numpy as np
 import time
-import pyaudio
-from multiprocessing import Process, Queue, Event
 from collections import deque
-from dataclasses import dataclass
 from contextlib import contextmanager
-from typing import Optional
-from whisper_trt.vad import load_vad
-from whisper_trt.model import load_trt_model
+from dataclasses import dataclass
+from multiprocessing import Event, Process, Queue
+from typing import Any
+
+import numpy as np
+
+try:
+    import pyaudio
+except ImportError:  # pragma: no cover - optional dependency for examples
+    pyaudio = None
+
+
+def load_vad() -> Any:
+    """Load VAD backend used by this example.
+
+    This example relies on an external VAD provider that is not part of the
+    core package dependencies.
+    """
+    try:
+        from silero_vad import load_silero_vad
+    except ImportError as err:
+        raise RuntimeError(
+            "VAD dependency is missing. Install silero-vad to run this example."
+        ) from err
+    return load_silero_vad()
 
 
 def find_respeaker_audio_device_index():
+    if pyaudio is None:
+        raise RuntimeError("pyaudio is required to capture live microphone audio")
 
     p = pyaudio.PyAudio()
 
     info = p.get_host_api_info_by_index(0)
     num_devices = info.get("deviceCount")
+    device_index: int | None = None
 
     for i in range(num_devices):
-
         device_info = p.get_device_info_by_host_api_device_index(0, i)
 
         if "respeaker" in device_info.get("name").lower():
-
             device_index = i
     return device_index
 
 
 @contextmanager
 def get_respeaker_audio_stream(
-    device_index: Optional[int] = None,
+    device_index: int | None = None,
     sample_rate: int = 16000,
     channels: int = 6,
     bitwidth: int = 2,
 ):
+    if pyaudio is None:
+        raise RuntimeError("pyaudio is required to capture live microphone audio")
 
     if device_index is None:
         device_index = find_respeaker_audio_device_index()
@@ -107,7 +128,6 @@ class AudioSegment:
 
 
 class Microphone(Process):
-
     def __init__(
         self,
         output_queue: Queue,
@@ -152,7 +172,6 @@ class Microphone(Process):
 
 
 class VAD(Process):
-
     def __init__(
         self,
         input_queue: Queue,
@@ -177,12 +196,11 @@ class VAD(Process):
         self.speech_end_flag = speech_end_flag
 
     def run(self):
-
-        vad = load_vad()
+        vad_model = load_vad()
 
         # warmup run
 
-        vad(np.zeros(1536, dtype=np.float32), sr=self.sample_rate)
+        vad_model(np.zeros(1536, dtype=np.float32), sr=self.sample_rate)
 
         max_filter_window = deque(maxlen=self.max_filter_window)
 
@@ -193,11 +211,10 @@ class VAD(Process):
         if self.ready_flag is not None:
             self.ready_flag.set()
         while True:
-
             audio_chunk = self.input_queue.get()
 
             voice_prob = float(
-                vad(
+                vad_model(
                     audio_chunk.audio_numpy_normalized[self.use_channel],
                     sr=self.sample_rate,
                 ).flatten()[0]
@@ -217,7 +234,7 @@ class VAD(Process):
             )
 
             if is_voice > prev_is_voice:
-                speech_chunks = [chunk for chunk in max_filter_window]
+                speech_chunks = list(max_filter_window)
                 # start voice
 
                 speech_chunks.append(chunk)
@@ -238,7 +255,6 @@ class VAD(Process):
 
 
 class ASR(Process):
-
     def __init__(
         self,
         model: str,
@@ -255,7 +271,7 @@ class ASR(Process):
         self.backend = backend
 
     def run(self):
-
+        model: Any
         if self.backend == "whisper_trt":
             from whisper_trt import load_trt_model
 
@@ -272,11 +288,13 @@ class ASR(Process):
                     self.model = model
 
                 def transcribe(self, audio):
-                    segs, info = self.model.transcribe(audio)
+                    segs, _info = self.model.transcribe(audio)
                     text = "".join([seg.text for seg in segs])
                     return {"text": text}
 
             model = FasterWhisperWrapper(WhisperModel(self.model))
+        else:
+            raise ValueError(f"Unsupported backend: {self.backend}")
         # warmup
 
         model.transcribe(np.zeros(1536, dtype=np.float32))
@@ -284,7 +302,6 @@ class ASR(Process):
         if self.ready_flag is not None:
             self.ready_flag.set()
         while True:
-
             speech_segment = self.input_queue.get()
 
             t0 = time.perf_counter_ns()
@@ -304,7 +321,6 @@ class ASR(Process):
 
 
 class StartEndMonitor(Process):
-
     def __init__(self, start_flag: Event, end_flag):
         super().__init__()
         self.start_flag = start_flag
@@ -314,14 +330,13 @@ class StartEndMonitor(Process):
         while True:
             self.start_flag.wait()
             self.start_flag.clear()
-            print(f"Speech started.")
+            print("Speech started.")
             self.end_flag.wait()
             self.end_flag.clear()
-            print(f"Speech ended.")
+            print("Speech ended.")
 
 
 if __name__ == "__main__":
-
     import argparse
 
     parser = argparse.ArgumentParser()

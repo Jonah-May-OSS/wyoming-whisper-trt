@@ -13,8 +13,10 @@ import logging
 import os
 import sys
 import time
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
+from typing import Any
 
 from whisper.model import disable_sdpa
 from wyoming.info import AsrModel, AsrProgram, Attribution, Info
@@ -28,7 +30,7 @@ from whisper_trt import (
 )
 
 from . import __version__
-from .handler import WhisperTrtEventHandler
+from .handler import HandlerContext, HandlerSettings, WhisperTrtEventHandler
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -66,8 +68,8 @@ def setup_logging(debug: bool, log_format: str) -> None:
 
 def normalize_model_name(model_name: str) -> str:
     """
-    Normalizes the model name to ensure it matches the expected format.
-    Retains language-specific suffixes to allow selection between multilingual and language-specific models.
+    Normalizes the model name to ensure it matches the expected format while
+    retaining language-specific suffixes.
 
     Args:
         model_name (str): The input model name.
@@ -76,7 +78,7 @@ def normalize_model_name(model_name: str) -> str:
         str: The normalized model name.
     """
     normalized_name = model_name.lower()
-    logger.debug(f"Normalized model name: '{model_name}' to '{normalized_name}'.")
+    logger.debug("Normalized model name: '%s' to '%s'.", model_name, normalized_name)
     return normalized_name
 
 
@@ -109,7 +111,9 @@ def extract_languages(model: WhisperTRT, model_name: str) -> list[str]:
         language_code = model_name.split(".")[-1]
         languages = [language_code]
         logger.debug(
-            f"Model '{model_name}' is language-specific. Supported language: {languages}"
+            "Model '%s' is language-specific. Supported language: %s",
+            model_name,
+            languages,
         )
     else:
         try:
@@ -117,28 +121,34 @@ def extract_languages(model: WhisperTRT, model_name: str) -> list[str]:
             # it would return a list of all valid language codes. If not, fallback to ["en"].
             languages = model.get_supported_languages()
             logger.debug(
-                f"Supported languages retrieved for model '{model_name}': {languages}"
+                "Supported languages retrieved for model '%s': %s",
+                model_name,
+                languages,
             )
         except AttributeError:
             logger.warning(
                 "Model does not have 'get_supported_languages' method. Defaulting to ['en']."
             )
             languages = ["en"]
-        except Exception as e:
+        except (RuntimeError, ValueError, TypeError) as err:
             logger.error(
-                f"Error retrieving languages from model: {e}. Defaulting to ['en']."
+                "Error retrieving languages from model: %s. Defaulting to ['en'].",
+                err,
             )
             languages = ["en"]
     return languages
 
 
-def build_wyoming_info(model_name: str, languages: list[str]) -> Info:
+def build_wyoming_info(
+    model_name: str, languages: list[str], streaming: bool = False
+) -> Info:
     """
     Builds the Wyoming Info object with ASR model details.
 
     Args:
         model_name (str): The name of the ASR model.
         languages (list[str]): Supported languages for the model.
+        streaming (bool): Whether transcript streaming is enabled.
 
     Returns:
         Info: The constructed Info object.
@@ -154,7 +164,7 @@ def build_wyoming_info(model_name: str, languages: list[str]) -> Info:
                 ),
                 installed=True,
                 version=__version__,
-                supports_transcript_streaming=True,
+                supports_transcript_streaming=streaming,
                 models=[
                     AsrModel(
                         name=model_name,
@@ -172,12 +182,19 @@ def build_wyoming_info(model_name: str, languages: list[str]) -> Info:
         ],
     )
     logger.debug(
-        f"Wyoming Info built with model '{model_name}' and languages {languages}."
+        "Wyoming Info built with model '%s' and languages %s.",
+        model_name,
+        languages,
     )
     return wyoming_info
 
 
-async def run_server(uri: str, handler_factory_func, *args, **kwargs) -> None:
+async def run_server(
+    uri: str,
+    handler_factory_func: Callable[..., Any],
+    *args: Any,
+    **kwargs: Any,
+) -> None:
     """
     Initializes and runs the asynchronous server.
 
@@ -189,12 +206,12 @@ async def run_server(uri: str, handler_factory_func, *args, **kwargs) -> None:
     """
     # Create the wyoming server (e.g. AsyncTcpServer)
     server = AsyncServer.from_uri(uri)
-    logger.info(f"Server initialized and listening on {uri}.")
+    logger.info("Server initialized and listening on %s.", uri)
 
     try:
         await server.run(handler_factory_func, *args, **kwargs)
-    except Exception as e:
-        logger.error(f"Server encountered an error: {e}")
+    except (RuntimeError, OSError, ValueError) as err:
+        logger.error("Server encountered an error: %s", err)
         raise
     finally:
         # Use the stop method to handle event handler shutdown and server closure
@@ -292,20 +309,23 @@ async def main() -> None:
     if not args.download_dir:
         args.download_dir = args.data_dir[0]
         logger.debug(
-            f"No download directory specified. Using first data directory: {args.download_dir}"
+            "No download directory specified. Using first data directory: %s",
+            args.download_dir,
         )
 
     download_path = Path(args.download_dir)
     try:
         download_path.mkdir(parents=True, exist_ok=True)
-        logger.debug(f"Ensured download directory exists at '{download_path}'.")
+        logger.debug("Ensured download directory exists at '%s'.", download_path)
     except OSError as e:
-        logger.error(f"Failed to create download directory at '{download_path}': {e}")
+        logger.error(
+            "Failed to create download directory at '%s': %s", download_path, e
+        )
         sys.exit(1)
 
     # Load Whisper TRT model
     try:
-        logger.info(f"Loading Whisper TRT model '{model_name}'...")
+        logger.info("Loading Whisper TRT model '%s'...", model_name)
         model_path = os.path.join(
             args.download_dir,
             get_model_filename(model_name, WhisperTRTBuilder.get_compute_type()),
@@ -317,16 +337,16 @@ async def main() -> None:
             verbose=args.debug,
             language=args.language,
         )
-        logger.info(f"Whisper TRT model '{model_name}' loaded successfully.")
-    except Exception as e:
-        logger.error(f"Failed to load Whisper TRT model '{model_name}': {e}")
+        logger.info("Whisper TRT model '%s' loaded successfully.", model_name)
+    except (KeyError, RuntimeError, OSError, ValueError) as err:
+        logger.error("Failed to load Whisper TRT model '%s': %s", model_name, err)
         sys.exit(1)
 
     # Extract supported languages
     languages = extract_languages(trt_model, model_name)
 
     # Build Wyoming Info
-    wyoming_info = build_wyoming_info(model_name, languages)
+    wyoming_info = build_wyoming_info(model_name, languages, streaming=args.streaming)
 
     # Initialize asyncio lock for model access
     model_lock = asyncio.Lock()
@@ -335,21 +355,24 @@ async def main() -> None:
     # Create the event handler factory, passing the user-defined language
     handler_factory_func = partial(
         WhisperTrtEventHandler,
-        wyoming_info=wyoming_info,
-        cli_args=args,
-        model=trt_model,
-        model_lock=model_lock,
-        initial_prompt=args.initial_prompt,
-        streaming=args.streaming,
-        default_language=args.language,
+        context=HandlerContext(
+            wyoming_info=wyoming_info,
+            model=trt_model,
+            model_lock=model_lock,
+        ),
+        settings=HandlerSettings(
+            initial_prompt=args.initial_prompt,
+            streaming=args.streaming,
+            default_language=args.language,
+        ),
     )
 
     # Run the server
     try:
         logger.info("Starting the Whisper TRT ASR server...")
         await run_server(args.uri, handler_factory_func)
-    except Exception as e:
-        logger.error(f"Server encountered an unexpected error: {e}")
+    except (RuntimeError, OSError, ValueError) as err:
+        logger.error("Server encountered an unexpected error: %s", err)
         sys.exit(1)
 
 
@@ -359,8 +382,8 @@ def run() -> None:
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Shutting down due to keyboard interrupt.")
-    except Exception as e:
-        logger.error(f"Unhandled exception: {e}")
+    except (RuntimeError, OSError, ValueError) as err:
+        logger.error("Unhandled exception: %s", err)
         sys.exit(1)
 
 
