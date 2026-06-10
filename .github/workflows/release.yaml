@@ -39,6 +39,26 @@ jobs:
           assets: |
             release.zip
 
+      # The GitHub list-releases API is eventually consistent, so the draft
+      # created above is sometimes not visible yet when publish runs, which
+      # makes GitReleaseManager crash with a NullReferenceException.
+      - name: Wait for draft release to be visible
+        env:
+          GH_TOKEN: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
+          TAG: ${{ env.VERSION }}
+        run: |
+          for attempt in $(seq 1 30); do
+            if gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+                 --jq '.[].tag_name' | grep -Fxq "$TAG"; then
+              echo "Draft release for $TAG is visible to the API."
+              exit 0
+            fi
+            echo "Draft release for $TAG not listed yet (attempt $attempt/30), retrying in 10s..."
+            sleep 10
+          done
+          echo "::error::Draft release for $TAG never appeared in the releases list"
+          exit 1
+
       - name: Publish release with GitReleaseManager
         uses: gittools/actions/gitreleasemanager/publish@40f115e87851d46e8924ae3aa57f006b0e84268c
         with:
