@@ -45,7 +45,7 @@ jobs:
       - name: Wait for draft release to be visible
         env:
           GH_TOKEN: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
-          TAG: ${{ steps.extract_version.outputs.version }}
+          TAG: ${{ env.VERSION }}
         run: |
           for attempt in $(seq 1 30); do
             if gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
