@@ -226,6 +226,6 @@ async def test_wyoming_whisper_trt(compute_type: str, decoder_mode: str) -> None
 
     if compute_type == "int8":
         # The int8 no-op warning added after benchmarking must be present.
-        assert _INT8_WARNING_FRAGMENT in stderr_buf.decode(
-            errors="replace"
-        ), "Expected the int8 reality-check warning in server logs"
+        assert _INT8_WARNING_FRAGMENT in stderr_buf.decode(errors="replace"), (
+            "Expected the int8 reality-check warning in server logs"
+        )
