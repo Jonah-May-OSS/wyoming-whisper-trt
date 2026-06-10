@@ -170,7 +170,14 @@ def main() -> None:
     if args.engine in ("encoder", "both"):
         targets.append(("encoder", checkpoint["audio_encoder_engine"]["engine"]))
     if args.engine in ("decoder", "both"):
-        targets.append(("decoder", checkpoint["text_decoder_engine"]["engine"]))
+        # The decoder is three engines now: cross-K/V projector, prefill, and
+        # the cached single-token step.
+        for name, key in (
+            ("decoder-cross-kv", "cross_kv_engine"),
+            ("decoder-prefill", "prefill_engine"),
+            ("decoder-step", "decoder_step_engine"),
+        ):
+            targets.append((name, checkpoint[key]["engine"]))
 
     print(f"Engine file: {engine_path} ({engine_path.stat().st_size / 2**20:.1f} MiB)")
     reports = [_inspect_engine(blob, name) for name, blob in targets]
