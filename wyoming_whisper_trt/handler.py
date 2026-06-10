@@ -27,7 +27,7 @@ logger.addHandler(logging.NullHandler())
 
 
 # Whisper's mel front-end is hard-wired for 16 kHz mono audio.
-_TARGET_RATE = 16000
+TARGET_RATE = 16000
 
 
 def wav_bytes_to_np_array(wav_bytes: bytes) -> np.ndarray:
@@ -62,8 +62,8 @@ def wav_bytes_to_np_array(wav_bytes: bytes) -> np.ndarray:
         audio = audio.reshape(-1, channels).mean(axis=1)
 
     # Resample to 16 kHz via linear interpolation.
-    if rate != _TARGET_RATE and audio.size:
-        target_len = round(audio.size * _TARGET_RATE / rate)
+    if rate != TARGET_RATE and audio.size:
+        target_len = round(audio.size * TARGET_RATE / rate)
         if target_len > 0:
             audio = np.interp(
                 np.linspace(0.0, audio.size - 1, num=target_len),

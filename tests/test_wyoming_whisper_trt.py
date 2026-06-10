@@ -25,7 +25,7 @@ from wyoming.audio import AudioStart, AudioStop, wav_to_chunks
 from wyoming.event import async_read_event, async_write_event
 from wyoming.info import Describe, Info
 
-from wyoming_whisper_trt.handler import _TARGET_RATE, wav_bytes_to_np_array
+from wyoming_whisper_trt.handler import TARGET_RATE, wav_bytes_to_np_array
 
 _CUDA_AVAILABLE = torch.cuda.is_available()
 
@@ -130,7 +130,7 @@ def test_wav_bytes_to_np_array_normalizes(channels: int, rate: int) -> None:
     assert audio.ndim == 1
     assert audio.dtype == np.float32
     assert audio.flags["C_CONTIGUOUS"]
-    assert abs(audio.size - _TARGET_RATE) <= 1  # resampled to ~1 s at 16 kHz
+    assert abs(audio.size - TARGET_RATE) <= 1  # resampled to ~1 s at 16 kHz
     assert audio.max() <= 1.0 and audio.min() >= -1.0
 
 
