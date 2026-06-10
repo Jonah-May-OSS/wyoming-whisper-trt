@@ -9,6 +9,7 @@ services:
       URI:        "${URI:-tcp://0.0.0.0:10300}"
       DATA_DIR:   "${DATA_DIR:-/data}"
       COMPUTE_TYPE: "${COMPUTE_TYPE:-float16}"
+      DECODER_MODE: "${DECODER_MODE:-kv}"
       DEVICE:     "${DEVICE:-cuda}"
       BEAM_SIZE:  "${BEAM_SIZE:-5}"
       STREAMING:  "${STREAMING:-false}"

@@ -42,6 +42,7 @@ python3 -m wyoming_whisper_trt \
     --uri "${URI:-tcp://0.0.0.0:10300}" \
     --data-dir "${DATA_DIR:-/data}" \
     --compute-type "${COMPUTE_TYPE:-float16}" \
+    --decoder-mode "${DECODER_MODE:-kv}" \
     --device "${DEVICE:-cuda}" \
     --beam-size "${BEAM_SIZE:-5}" \
     "$@"

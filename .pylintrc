@@ -1,2 +1,11 @@
+[MASTER]
+# Let pylint resolve the in-repo whisper_trt / wyoming_whisper_trt packages
+# when linting files outside them (e.g. script/*), matching the sys.path
+# insertion those scripts do at runtime.
+init-hook=import sys; sys.path.insert(0, ".")
+
 [TYPECHECK]
 extension-pkg-allow-list=torch2trt
+# tensorrt resolves its attributes lazily at import time, so pylint's static
+# member inference reports false no-member errors for trt.Logger etc.
+ignored-modules=tensorrt

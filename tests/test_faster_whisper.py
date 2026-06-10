@@ -30,6 +30,7 @@ _TRANSCRIBE_TIMEOUT = 60
     reason="wyoming_faster_whisper stdio transport is unreliable on Windows",
 )
 async def test_faster_whisper() -> None:
+    """Transcribe a known WAV through wyoming_faster_whisper over stdio."""
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
         "-m",

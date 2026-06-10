@@ -56,7 +56,9 @@ def setup_logging(debug: bool, log_format: str) -> None:
         log_format (str): Format string for log messages.
     """
     formatter = NanosecondFormatter(log_format)
-    handler = logging.StreamHandler(sys.stdout)
+    # Log to stderr: with --uri stdio:// the Wyoming protocol owns stdout,
+    # and any log line written there corrupts the event stream.
+    handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(formatter)
 
     root_logger = logging.getLogger()
@@ -222,21 +224,24 @@ async def run_server(
 def _apply_compute_type(compute_type: str) -> None:
     """Configure the builder for the requested compute type.
 
-    Warns when the experimental int8 path is selected (encoder INT8 +
-    FP16 decoder).
+    Warns when int8 is selected, since TensorRT is free to ignore the
+    request (implicit quantization is per-layer optional).
     """
     WhisperTRTBuilder.quant_mode = compute_type
     WhisperTRTBuilder.fp16_mode = compute_type == "float16"
     if compute_type == "int8":
         logger.warning(
-            "int8 is experimental: the encoder is quantized to INT8 (calibrated "
-            "on a bundled speech clip) and the decoder runs FP16. Accuracy can "
-            "differ from float16; benefits are largest on medium/large models."
+            "int8 requests TensorRT implicit INT8 quantization for the encoder "
+            "(the decoder always runs FP16), but TensorRT only uses INT8 where "
+            "it beats FP16. Measured on TensorRT 10 (RTX 3050, model 'base') "
+            "the result was identical to float16 — zero INT8 layers, same "
+            "accuracy and VRAM — with a slower engine build. Verify with "
+            "script/layer_report before assuming any benefit."
         )
 
 
-async def main() -> None:
-    """Main entry point."""
+def _parse_args() -> argparse.Namespace:
+    """Build the argument parser and parse the command line."""
     parser = argparse.ArgumentParser(description="Whisper TRT ASR Server")
     parser.add_argument(
         "--model",
@@ -269,9 +274,21 @@ async def main() -> None:
         default="float16",
         choices=["float32", "float16", "int8"],
         help=(
-            "Compute type (float32, float16, int8). int8 is experimental and "
-            "mixed-precision: the encoder runs INT8 (calibrated on a bundled "
-            "speech clip) and the decoder runs FP16."
+            "Compute type (float32, float16, int8). int8 requests an "
+            "INT8-calibrated encoder (decoder stays FP16), but TensorRT may "
+            "choose FP16 for every layer anyway; measured on TensorRT 10 the "
+            "engine came out identical to float16. See README."
+        ),
+    )
+    parser.add_argument(
+        "--decoder-mode",
+        default="kv",
+        choices=["kv", "simple"],
+        help=(
+            "Decoder implementation. 'kv' (default) caches attention K/V "
+            "across decode steps: ~2x lower latency, but builds three engines "
+            "that together cost ~600 MiB more VRAM. 'simple' is the original "
+            "single-engine decoder: lower VRAM, slower decode. See README."
         ),
     )
     parser.add_argument(
@@ -279,6 +296,18 @@ async def main() -> None:
         type=int,
         default=5,
         help="Beam size for decoding (default: 5)",
+    )
+    parser.add_argument(
+        "--max-workspace-mb",
+        type=int,
+        default=WhisperTRTBuilder.max_workspace_size >> 20,
+        help=(
+            "Per-engine TensorRT build-time scratch budget in MiB. This bounds "
+            "the workspace tactic search may use; it does not control runtime "
+            "VRAM (use --decoder-mode for that). Keep it generous; raise it "
+            "only if a large model fails to build. Engines are cached by "
+            "compute-type, decoder-mode, and workspace budget."
+        ),
     )
     parser.add_argument(
         "--initial-prompt",
@@ -313,7 +342,20 @@ async def main() -> None:
         help="Default language to use for transcription. Use 'auto' for detection.",
     )
 
-    args = parser.parse_args()
+    return parser.parse_args()
+
+
+async def main() -> None:
+    """Main entry point."""
+    args = _parse_args()
+
+    # Validate max-workspace-mb
+    if args.max_workspace_mb <= 0:
+        logger.error(
+            "Invalid --max-workspace-mb value: %d. Must be a positive integer.",
+            args.max_workspace_mb,
+        )
+        sys.exit(1)
 
     # Setup logging
     setup_logging(args.debug, args.log_format)
@@ -323,6 +365,16 @@ async def main() -> None:
 
     # Set compute-type
     _apply_compute_type(args.compute_type)
+
+    # Select the decoder implementation (must precede get_model_filename, which
+    # keys the cache on the decoder mode).
+    WhisperTRTBuilder.decoder_mode = args.decoder_mode
+    logger.debug("Decoder mode set to '%s'.", args.decoder_mode)
+
+    # Apply the TensorRT build-time workspace budget (an OOM escape hatch for
+    # large models; does not control runtime VRAM).
+    WhisperTRTBuilder.max_workspace_size = args.max_workspace_mb << 20
+    logger.debug("TensorRT max workspace set to %d MiB.", args.max_workspace_mb)
 
     # Set download directory to first data directory if not specified
     if not args.download_dir:
@@ -347,7 +399,11 @@ async def main() -> None:
         logger.info("Loading Whisper TRT model '%s'...", model_name)
         model_path = os.path.join(
             args.download_dir,
-            get_model_filename(model_name, WhisperTRTBuilder.get_compute_type()),
+            get_model_filename(
+                model_name,
+                WhisperTRTBuilder.get_compute_type(),
+                max_workspace_mb=args.max_workspace_mb,
+            ),
         )
         trt_model = load_trt_model(
             model_name,
