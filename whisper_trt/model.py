@@ -36,7 +36,7 @@ import torch
 import whisper.audio
 from torch import nn
 from whisper import load_model
-from whisper.model import LayerNorm, ModelDimensions, Tensor
+from whisper.model import LayerNorm, ModelDimensions, Tensor, disable_sdpa
 from whisper.tokenizer import TO_LANGUAGE_CODE, Tokenizer
 
 import torch2trt
@@ -592,32 +592,38 @@ class WhisperTRTBuilder:
         # FLOP-bound). INT8 is applied to the encoder only; see
         # build_audio_encoder_engine.
         decoder_fp16 = cls.fp16_mode or cls.quant_mode == "int8"
-        return _torch2trt_convert(
-            decoder_blocks_module,
-            [x, xa, mask],
-            use_onnx=True,
-            int8_mode=False,
-            min_shapes=[
-                (1, 1, dims.n_text_state),
-                (1, 1, dims.n_audio_state),
-                (dims.n_text_ctx, dims.n_text_ctx),
-            ],
-            opt_shapes=[
-                (1, 1, dims.n_text_state),
-                (1, dims.n_audio_ctx, dims.n_audio_state),
-                (dims.n_text_ctx, dims.n_text_ctx),
-            ],
-            max_shapes=[
-                (1, dims.n_text_ctx, dims.n_text_state),
-                (1, dims.n_audio_ctx, dims.n_audio_state),
-                (dims.n_text_ctx, dims.n_text_ctx),
-            ],
-            input_names=["x", "xa", "mask"],
-            output_names=["output"],
-            max_workspace_size=cls.max_workspace_size,
-            fp16_mode=decoder_fp16,
-            log_level=_trt_log_level(cls.verbose),
-        )
+        # Whisper's SDPA path computes is_causal as `mask is not None and
+        # n_ctx > 1`; under the ONNX trace n_ctx is symbolic, so that
+        # expression is a Tensor and SDPA rejects it (is_causal must be a
+        # bool). Convert via whisper's manual-attention path instead — it is
+        # mathematically identical and applies the mask explicitly.
+        with disable_sdpa():
+            return _torch2trt_convert(
+                decoder_blocks_module,
+                [x, xa, mask],
+                use_onnx=True,
+                int8_mode=False,
+                min_shapes=[
+                    (1, 1, dims.n_text_state),
+                    (1, 1, dims.n_audio_state),
+                    (dims.n_text_ctx, dims.n_text_ctx),
+                ],
+                opt_shapes=[
+                    (1, 1, dims.n_text_state),
+                    (1, dims.n_audio_ctx, dims.n_audio_state),
+                    (dims.n_text_ctx, dims.n_text_ctx),
+                ],
+                max_shapes=[
+                    (1, dims.n_text_ctx, dims.n_text_state),
+                    (1, dims.n_audio_ctx, dims.n_audio_state),
+                    (dims.n_text_ctx, dims.n_text_ctx),
+                ],
+                input_names=["x", "xa", "mask"],
+                output_names=["output"],
+                max_workspace_size=cls.max_workspace_size,
+                fp16_mode=decoder_fp16,
+                log_level=_trt_log_level(cls.verbose),
+            )
 
     @classmethod
     @torch.no_grad()
@@ -648,30 +654,33 @@ class WhisperTRTBuilder:
             if int8_mode
             else None
         )
-        return _torch2trt_convert(
-            encoder_module,
-            [x, positional_embedding],
-            use_onnx=True,
-            int8_mode=int8_mode,
-            int8_calib_dataset=int8_calib_dataset,
-            min_shapes=[(1, dims.n_mels, 1), (1, dims.n_audio_state)],
-            opt_shapes=[
-                (1, dims.n_mels, n_frames),
-                (dims.n_audio_ctx, dims.n_audio_state),
-            ],
-            max_shapes=[
-                (1, dims.n_mels, n_frames),
-                (dims.n_audio_ctx, dims.n_audio_state),
-            ],
-            input_names=["x", "positional_embedding"],
-            output_names=["output"],
-            max_workspace_size=cls.max_workspace_size,
-            # Allow FP16 fallback alongside INT8 so TensorRT can keep
-            # precision-sensitive layers in FP16 (mixed precision) instead of
-            # forcing every layer to INT8.
-            fp16_mode=cls.fp16_mode or int8_mode,
-            log_level=_trt_log_level(cls.verbose),
-        )
+        # Trace through whisper's manual-attention path (not SDPA) for the
+        # same reason as build_text_decoder_engine.
+        with disable_sdpa():
+            return _torch2trt_convert(
+                encoder_module,
+                [x, positional_embedding],
+                use_onnx=True,
+                int8_mode=int8_mode,
+                int8_calib_dataset=int8_calib_dataset,
+                min_shapes=[(1, dims.n_mels, 1), (1, dims.n_audio_state)],
+                opt_shapes=[
+                    (1, dims.n_mels, n_frames),
+                    (dims.n_audio_ctx, dims.n_audio_state),
+                ],
+                max_shapes=[
+                    (1, dims.n_mels, n_frames),
+                    (dims.n_audio_ctx, dims.n_audio_state),
+                ],
+                input_names=["x", "positional_embedding"],
+                output_names=["output"],
+                max_workspace_size=cls.max_workspace_size,
+                # Allow FP16 fallback alongside INT8 so TensorRT can keep
+                # precision-sensitive layers in FP16 (mixed precision) instead
+                # of forcing every layer to INT8.
+                fp16_mode=cls.fp16_mode or int8_mode,
+                log_level=_trt_log_level(cls.verbose),
+            )
 
     @classmethod
     @torch.no_grad()
