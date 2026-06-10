@@ -570,7 +570,7 @@ class WhisperTRTBuilder:
                 use_onnx=True,
                 int8_mode=False,
                 input_names=["xa"],
-                output_names=["cross_k", "cross_v"],
+                output_names=["cross_kv"],
                 max_workspace_size=cls.max_workspace_size,
                 fp16_mode=cls._decoder_fp16(),
                 log_level=_trt_log_level(cls.verbose),
