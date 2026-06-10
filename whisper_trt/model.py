@@ -278,12 +278,19 @@ class TextDecoderTRT(nn.Module):
 
     @torch.no_grad()
     def forward(self, x: Tensor, xa: Tensor) -> Tensor:
-        """Decode token ids into next-token logits."""
+        """Decode token ids into next-token logits.
+
+        Returns logits for the final position only: greedy decoding consumes
+        just the last token, so projecting the whole growing prefix through
+        the ~51 k-wide vocab matmul every step is wasted work. The self-
+        attention inside ``self.engine`` still sees the full prefix (there is
+        no KV cache); only the output projection is sliced.
+        """
         token_emb = self.token_embedding(x).to(xa.device)
         pos_emb = self.positional_embedding[: x.shape[-1]].to(xa.device)
         hidden = token_emb + pos_emb
         hidden = self.engine(hidden, xa, self.mask.to(xa.device))
-        hidden = self.ln(hidden)
+        hidden = self.ln(hidden)[:, -1:, :]
         weight = self.token_embedding.weight.to(hidden.device)
         return (hidden @ torch.transpose(weight, 0, 1)).float()
 
@@ -414,24 +421,27 @@ class WhisperTRT(nn.Module):
         chunks: list[str] = []
         decode_start = time.perf_counter()
 
+        last_token_id = -1
         for _ in range(request.cur_len, request.max_len):
             token_logits = self.logits(
                 request.out_tokens[:, : request.cur_len],
                 request.audio_features,
             )
-            next_token = token_logits.argmax(dim=-1)[0, -1]
-            request.out_tokens[0, request.cur_len] = next_token
+            # One GPU->CPU sync per token; reuse the int for the buffer write
+            # and the stop check rather than reading the tensor back twice.
+            last_token_id = int(token_logits.argmax(dim=-1)[0, -1].item())
+            request.out_tokens[0, request.cur_len] = last_token_id
             request.cur_len += 1
 
             if request.stream:
                 interim = request.out_tokens[:, request.prompt_len : request.cur_len]
                 chunks.append(self._decode_tokens(interim))
 
-            if next_token.item() == tokenizer.eot:
+            if last_token_id == tokenizer.eot:
                 break
 
         end_index = request.cur_len
-        if request.out_tokens[0, request.cur_len - 1].item() == tokenizer.eot:
+        if last_token_id == tokenizer.eot:
             end_index = request.cur_len - 1
 
         final_ids = request.out_tokens[:, request.prompt_len : end_index]
@@ -442,10 +452,13 @@ class WhisperTRT(nn.Module):
     def _audio_to_mel(self, audio_array: np.ndarray) -> tuple[Tensor, float]:
         """Convert normalized audio samples to a mel spectrogram tensor."""
         load_start = time.perf_counter()
+        # Compute the mel on the GPU directly: avoids the CPU STFT plus a
+        # full-spectrogram host->device copy (only the raw audio crosses).
         mel = whisper.audio.log_mel_spectrogram(
             audio_array,
             padding=whisper.audio.N_SAMPLES,
-        )[None, ...].cuda()
+            device="cuda",
+        )[None, ...]
         if mel.shape[2] > whisper.audio.N_FRAMES:
             mel = mel[:, :, : whisper.audio.N_FRAMES]
         return mel, time.perf_counter() - load_start
@@ -508,7 +521,10 @@ class WhisperTRT(nn.Module):
                 total_time * 1000,
             )
 
-        torch.cuda.empty_cache()
+        # Note: intentionally no torch.cuda.empty_cache() here. Releasing the
+        # allocator's cached blocks every request just forces the next request
+        # to re-acquire them from the driver — it adds latency without lowering
+        # steady-state VRAM, since the cached blocks are reused anyway.
 
         result: dict[str, Any] = {"text": final_text}
         if stream:
