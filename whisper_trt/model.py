@@ -21,6 +21,11 @@
 
 """TensorRT-backed Whisper model and model-builder utilities."""
 
+# This module orchestrates the encoder plus the three decoder engines, their
+# builders, and the loader; the decode modules themselves live in _decoder.py.
+# It runs a little over the default line cap as a cohesive unit.
+# pylint: disable=too-many-lines
+
 import importlib.resources
 import logging
 import os
@@ -45,7 +50,9 @@ from .__version__ import __version__
 from ._decoder import (
     CachedDecoderStep,
     CrossKVProjector,
+    DecoderEngines,
     DecodeRequest,
+    PrefillDecoder,
     TextDecoderState,
     TextDecoderTRTKV,
 )
@@ -341,19 +348,15 @@ class WhisperTRT(nn.Module):
         return out_tokens, cur_len, cur_len
 
     def _prime_cache(self, request: DecodeRequest) -> tuple[Tensor, Tensor, Tensor]:
-        """Replay the prompt to build the KV cache and precompute cross K/V.
+        """Prefill the KV cache from the prompt and precompute cross K/V.
 
         Returns the logits that predict the first generated token, the primed
         self-attention cache, and the (static) cross-attention cache.
         """
         decoder = self.decoder
         cross_kv = decoder.compute_cross_kv(request.audio_features)
-        self_kv = decoder.empty_self_cache(request.audio_features.device)
-        logits: Tensor | None = None
-        for pos in range(request.prompt_len):
-            token_id = int(request.out_tokens[0, pos].item())
-            logits, self_kv = decoder.step(token_id, pos, self_kv, cross_kv)
-        assert logits is not None  # prompt_len >= 1 (always seeded with sot)
+        prompt_ids = request.out_tokens[0, : request.prompt_len].tolist()
+        logits, self_kv = decoder.prefill(prompt_ids, cross_kv)
         return logits, self_kv, cross_kv
 
     def _decode_sequence(
@@ -578,11 +581,63 @@ class WhisperTRTBuilder:
 
     @classmethod
     @torch.no_grad()
+    def build_prefill_engine(cls) -> Any:
+        """Build the prompt-prefill engine (full masked pass over the prompt).
+
+        The prompt length (axis 1 of ``x``, both axes of ``mask``, axis 3 of
+        the emitted cache) is dynamic from 1 to ``n_text_ctx``.
+        """
+        dims = cls._load_model_once()
+        model_inst = load_model(cls.model).cuda().eval()
+        module = PrefillDecoder(model_inst.decoder.blocks, dims.n_text_head)
+
+        n_layers = dims.n_text_layer
+        n_state = dims.n_text_state
+        n_audio_ctx = dims.n_audio_ctx
+        n_text_ctx = dims.n_text_ctx
+        opt_len = max(2, min(8, n_text_ctx // 16))
+
+        x = torch.randn(1, opt_len, n_state).cuda()
+        cross_kv = torch.randn(2, n_layers, 1, n_audio_ctx, n_state).cuda()
+        mask = torch.zeros(opt_len, opt_len).cuda()
+
+        with disable_sdpa():
+            return _torch2trt_convert(
+                module,
+                [x, cross_kv, mask],
+                use_onnx=True,
+                int8_mode=False,
+                min_shapes=[
+                    (1, 1, n_state),
+                    (2, n_layers, 1, n_audio_ctx, n_state),
+                    (1, 1),
+                ],
+                opt_shapes=[
+                    (1, opt_len, n_state),
+                    (2, n_layers, 1, n_audio_ctx, n_state),
+                    (opt_len, opt_len),
+                ],
+                max_shapes=[
+                    (1, n_text_ctx, n_state),
+                    (2, n_layers, 1, n_audio_ctx, n_state),
+                    (n_text_ctx, n_text_ctx),
+                ],
+                input_names=["x", "cross_kv", "mask"],
+                output_names=["last_hidden", "self_kv"],
+                max_workspace_size=cls.max_workspace_size,
+                fp16_mode=cls._decoder_fp16(),
+                log_level=_trt_log_level(cls.verbose),
+            )
+
+    @classmethod
+    @torch.no_grad()
     def build_decoder_step_engine(cls) -> Any:
         """Build the single-token KV-cached decoder-step engine.
 
-        The self-attention cache length (axis 2 of ``self_k``/``self_v``) is
-        dynamic: it grows from 0 (empty, first prompt token) to ``n_text_ctx``.
+        The self-attention cache length (axis 3 of ``self_kv``) is dynamic. It
+        starts at the prompt length (>= 1; the prefill engine seeds it, so the
+        step engine never sees an empty cache — TensorRT cannot bind a
+        zero-length input) and grows to ``n_text_ctx``.
         """
         dims = cls._load_model_once()
         model_inst = load_model(cls.model).cuda().eval()
@@ -606,7 +661,7 @@ class WhisperTRTBuilder:
                 int8_mode=False,
                 min_shapes=[
                     (1, 1, n_state),
-                    (2, n_layers, 1, 0, n_state),
+                    (2, n_layers, 1, 1, n_state),
                     (2, n_layers, 1, n_audio_ctx, n_state),
                 ],
                 opt_shapes=[
@@ -720,6 +775,7 @@ class WhisperTRTBuilder:
             "whisper_trt_version": __version__,
             "dims": asdict(load_model(cls.model).dims),
             "cross_kv_engine": cls.build_cross_kv_engine().state_dict(),
+            "prefill_engine": cls.build_prefill_engine().state_dict(),
             "decoder_step_engine": cls.build_decoder_step_engine().state_dict(),
             "text_decoder_extra_state": cls.get_text_decoder_extra_state(),
             "audio_encoder_engine": cls.build_audio_encoder_engine().state_dict(),
@@ -763,6 +819,8 @@ class WhisperTRTBuilder:
         """Construct the KV-cached text decoder from a serialized checkpoint."""
         cross_kv_engine = _new_trt_module().cuda()
         cross_kv_engine.load_state_dict(checkpoint["cross_kv_engine"])
+        prefill_engine = _new_trt_module().cuda()
+        prefill_engine.load_state_dict(checkpoint["prefill_engine"])
         step_engine = _new_trt_module().cuda()
         step_engine.load_state_dict(checkpoint["decoder_step_engine"])
 
@@ -777,8 +835,11 @@ class WhisperTRTBuilder:
             mask = mask.cuda()
 
         return TextDecoderTRTKV(
-            cross_kv_engine,
-            step_engine,
+            DecoderEngines(
+                cross_kv=cross_kv_engine,
+                prefill=prefill_engine,
+                step=step_engine,
+            ),
             TextDecoderState(
                 token_embedding=token_embedding,
                 positional_embedding=positional_embedding,
@@ -916,10 +977,11 @@ MODEL_BUILDERS = {
 
 
 # Bump when the on-disk engine layout changes so stale checkpoints are
-# rebuilt rather than mis-loaded. "kv2" = the two-engine KV-cached decoder
-# (cross_kv_engine + decoder_step_engine). Pre-KV engines used no schema tag,
-# so their files remain on disk untouched and a code revert reuses them.
-_ENGINE_SCHEMA = "kv2"
+# rebuilt rather than mis-loaded. "kv3" = the three-engine KV-cached decoder
+# (cross_kv_engine + prefill_engine + decoder_step_engine). Pre-KV engines
+# used no schema tag, so their files remain on disk untouched and a code
+# revert reuses them.
+_ENGINE_SCHEMA = "kv3"
 
 
 def get_model_filename(name: str, quant_mode: str) -> str:

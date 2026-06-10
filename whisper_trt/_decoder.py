@@ -39,26 +39,41 @@ class DecodeRequest:
     stream: bool
 
 
+@dataclass
+class DecoderEngines:
+    """The three TensorRT engines backing the KV-cached decoder."""
+
+    cross_kv: Any
+    prefill: Any
+    step: Any
+
+
 def _split_heads(x: Tensor, n_head: int) -> Tensor:
     """Reshape [batch, seq, n_state] into [batch, n_head, seq, head_dim]."""
     batch, seq, n_state = x.shape
     return x.view(batch, seq, n_head, n_state // n_head).permute(0, 2, 1, 3)
 
 
-def _attention(q: Tensor, k: Tensor, v: Tensor, n_head: int) -> Tensor:
+def _attention(
+    q: Tensor, k: Tensor, v: Tensor, n_head: int, mask: Tensor | None = None
+) -> Tensor:
     """Scaled-dot-product attention returning [batch, seq, n_state].
 
-    No mask: callers pass either a single query (which may attend to every
-    cached key — causal by construction) or cross-attention against the full
-    encoder output. Uses the symmetric ``scale ** 0.25`` split for parity
-    with whisper's manual-attention path.
+    ``mask`` (additive, ``[n_q, n_k]``) is applied to the scores before
+    softmax for the multi-token causal prefill pass. Single-token decode
+    steps pass ``mask=None`` — the lone query attends to every cached key,
+    causal by construction. Uses the symmetric ``scale ** 0.25`` split for
+    parity with whisper's manual-attention path.
     """
     head_dim = q.shape[-1] // n_head
     scale = head_dim**-0.25
     qh = _split_heads(q, n_head) * scale
     kh = _split_heads(k, n_head) * scale
     vh = _split_heads(v, n_head)
-    weights = torch.softmax(qh @ kh.transpose(-1, -2), dim=-1)
+    scores = qh @ kh.transpose(-1, -2)
+    if mask is not None:
+        scores = scores + mask
+    weights = torch.softmax(scores, dim=-1)
     out = (weights @ vh).permute(0, 2, 1, 3)
     return out.flatten(start_dim=2)
 
@@ -158,34 +173,108 @@ class CachedDecoderStep(nn.Module):
         return "Cached single-token decoder step"
 
 
+class PrefillDecoder(nn.Module):
+    """Process the whole prompt in one masked pass, emitting the initial cache.
+
+    Runs full causal self-attention over the prompt (length >= 1) so the
+    step engine never receives an empty cache — TensorRT cannot bind a
+    zero-length input tensor. Returns the last position's hidden state (which
+    predicts the first generated token) and the prompt's self-attention K/V.
+    """
+
+    def __init__(self, blocks: Any, n_head: int) -> None:
+        super().__init__()
+        self.blocks = blocks
+        self.n_head = n_head
+
+    def _block(
+        self, block: Any, x: Tensor, mask: Tensor, cross_kv_i: Tensor
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """Run one residual block over the full prompt, returning self K/V."""
+        attended = block.attn_ln(x)
+        k = block.attn.key(attended)
+        v = block.attn.value(attended)
+        q = block.attn.query(attended)
+        x = x + block.attn.out(_attention(q, k, v, self.n_head, mask))
+
+        qc = block.cross_attn.query(block.cross_attn_ln(x))
+        x = x + block.cross_attn.out(
+            _attention(qc, cross_kv_i[0], cross_kv_i[1], self.n_head)
+        )
+
+        x = x + block.mlp(block.mlp_ln(x))
+        return x, k, v
+
+    @torch.no_grad()
+    def forward(
+        self, x: Tensor, cross_kv: Tensor, mask: Tensor
+    ) -> tuple[Tensor, Tensor]:
+        """Prefill the cache from the prompt.
+
+        Args:
+            x: Prompt hidden states, ``[1, prompt_len, n_state]``.
+            cross_kv: Precomputed cross K/V, ``[2, n_layers, 1, n_audio_ctx, n_state]``.
+            mask: Additive causal mask, ``[prompt_len, prompt_len]``.
+
+        Returns:
+            The final position's hidden state ``[1, 1, n_state]`` and the
+            prompt self-attention cache ``[2, n_layers, 1, prompt_len, n_state]``.
+        """
+        new_k: list[Tensor] = []
+        new_v: list[Tensor] = []
+        for i, block in enumerate(cast(list[Any], self.blocks)):
+            x, k, v = self._block(block, x, mask, cross_kv[:, i])
+            new_k.append(k)
+            new_v.append(v)
+        self_kv = torch.stack([torch.stack(new_k, 0), torch.stack(new_v, 0)], 0)
+        return x[:, -1:, :], self_kv
+
+    def summary(self) -> str:
+        """Return a short human-readable component summary."""
+        return "Prompt prefill decoder"
+
+
 class TextDecoderTRTKV(nn.Module):
-    """KV-cached Whisper text decoder backed by two TensorRT engines."""
+    """KV-cached Whisper text decoder backed by three TensorRT engines."""
 
     def __init__(
         self,
-        cross_kv_engine: Any,
-        step_engine: Any,
+        engines: DecoderEngines,
         state: TextDecoderState,
         dims: ModelDimensions,
     ) -> None:
         super().__init__()
-        self.cross_kv_engine = cross_kv_engine
-        self.step_engine = step_engine
+        self.engines = engines
         self.token_embedding = state.token_embedding
         self.positional_embedding = state.positional_embedding
         self.ln = state.ln
+        self.register_buffer("mask", state.mask, persistent=False)
         self.n_layers = dims.n_text_layer
         self.n_state = dims.n_text_state
 
     @torch.no_grad()
     def compute_cross_kv(self, xa: Tensor) -> Tensor:
         """Project encoder features into cached cross K/V (once per utterance)."""
-        return self.cross_kv_engine(xa)
+        return self.engines.cross_kv(xa)
 
     @torch.no_grad()
-    def empty_self_cache(self, device: torch.device) -> Tensor:
-        """Return a zero-length self-attention K/V cache for a fresh utterance."""
-        return torch.zeros((2, self.n_layers, 1, 0, self.n_state), device=device)
+    def prefill(self, prompt_ids: list[int], cross_kv: Tensor) -> tuple[Tensor, Tensor]:
+        """Prime the KV cache from the prompt in a single masked pass.
+
+        Returns the logits predicting the first generated token and the
+        initial self-attention cache (length == ``len(prompt_ids)``).
+        """
+        device = cross_kv.device
+        prompt_len = len(prompt_ids)
+        tokens = torch.tensor([prompt_ids], dtype=torch.long, device=device)
+        pos = self.positional_embedding[:prompt_len].to(device)
+        hidden_in = self.token_embedding(tokens).to(device) + pos
+        mask = cast(Tensor, self.mask)[:prompt_len, :prompt_len].to(device)
+        last_hidden, self_kv = self.engines.prefill(hidden_in, cross_kv, mask)
+        last_hidden = self.ln(last_hidden)
+        weight = self.token_embedding.weight.to(device)
+        logits = (last_hidden @ torch.transpose(weight, 0, 1)).float()
+        return logits, self_kv
 
     @torch.no_grad()
     def step(
@@ -200,7 +289,7 @@ class TextDecoderTRTKV(nn.Module):
         token = torch.tensor([[token_id]], dtype=torch.long, device=device)
         pos = self.positional_embedding[position : position + 1].to(device)
         hidden_in = self.token_embedding(token).to(device) + pos
-        hidden, new_self_kv = self.step_engine(hidden_in, self_kv, cross_kv)
+        hidden, new_self_kv = self.engines.step(hidden_in, self_kv, cross_kv)
         hidden = self.ln(hidden)[:, -1:, :]
         weight = self.token_embedding.weight.to(device)
         logits = (hidden @ torch.transpose(weight, 0, 1)).float()
