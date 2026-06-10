@@ -240,8 +240,8 @@ def _apply_compute_type(compute_type: str) -> None:
         )
 
 
-async def main() -> None:
-    """Main entry point."""
+def _parse_args() -> argparse.Namespace:
+    """Build the argument parser and parse the command line."""
     parser = argparse.ArgumentParser(description="Whisper TRT ASR Server")
     parser.add_argument(
         "--model",
@@ -287,6 +287,17 @@ async def main() -> None:
         help="Beam size for decoding (default: 5)",
     )
     parser.add_argument(
+        "--max-workspace-mb",
+        type=int,
+        default=WhisperTRTBuilder.max_workspace_size >> 20,
+        help=(
+            "Per-engine TensorRT scratch limit in MiB. The KV-cached decoder "
+            "builds three engines that each reserve workspace, so this scales "
+            "VRAM; lower it on tight-memory devices, raise it if a large model "
+            "fails to build. Changing it requires a rebuilt engine cache."
+        ),
+    )
+    parser.add_argument(
         "--initial-prompt",
         default=None,
         help="Optional text to provide as a prompt for the first window",
@@ -319,7 +330,12 @@ async def main() -> None:
         help="Default language to use for transcription. Use 'auto' for detection.",
     )
 
-    args = parser.parse_args()
+    return parser.parse_args()
+
+
+async def main() -> None:
+    """Main entry point."""
+    args = _parse_args()
 
     # Setup logging
     setup_logging(args.debug, args.log_format)
@@ -329,6 +345,10 @@ async def main() -> None:
 
     # Set compute-type
     _apply_compute_type(args.compute_type)
+
+    # Apply the TensorRT workspace ceiling (scales engine VRAM).
+    WhisperTRTBuilder.max_workspace_size = args.max_workspace_mb << 20
+    logger.debug("TensorRT max workspace set to %d MiB.", args.max_workspace_mb)
 
     # Set download directory to first data directory if not specified
     if not args.download_dir:

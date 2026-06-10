@@ -511,7 +511,12 @@ class WhisperTRTBuilder:
     model: str
     fp16_mode: bool = False
     quant_mode: str = "float32"  # Options: "float32", "float16", "int8"
-    max_workspace_size: int = 1 << 30
+    # Per-engine TensorRT scratch ceiling. The decoder is three engines now,
+    # each reserving workspace from this budget, so an over-generous limit
+    # multiplies runtime VRAM. 256 MiB is ample for these small engines
+    # (torch2trt itself defaults to 32 MiB); raise via --max-workspace-mb if a
+    # large model needs more. Changing it invalidates cached engines.
+    max_workspace_size: int = 1 << 28
     verbose: bool = False
     _tokenizer: Tokenizer | None = None
     _dims: ModelDimensions | None = None
@@ -981,7 +986,7 @@ MODEL_BUILDERS = {
 # (cross_kv_engine + prefill_engine + decoder_step_engine). Pre-KV engines
 # used no schema tag, so their files remain on disk untouched and a code
 # revert reuses them.
-_ENGINE_SCHEMA = "kv3"
+_ENGINE_SCHEMA = "kv4"
 
 
 def get_model_filename(name: str, quant_mode: str) -> str:
@@ -999,7 +1004,7 @@ def get_model_filename(name: str, quant_mode: str) -> str:
 
     Returns:
         str: Filename with the quant mode and schema embedded
-            (e.g. "tiny_trt_float16_kv2.pth").
+            (e.g. "tiny_trt_float16_kv4.pth").
 
     Raises:
         RuntimeError: If ``name`` is not a recognised model name.
