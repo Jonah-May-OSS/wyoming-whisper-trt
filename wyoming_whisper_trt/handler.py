@@ -26,20 +26,52 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 
+# Whisper's mel front-end is hard-wired for 16 kHz mono audio.
+_TARGET_RATE = 16000
+
+
 def wav_bytes_to_np_array(wav_bytes: bytes) -> np.ndarray:
-    """
-    Read a WAV file from an in-memory bytes object and return a NumPy array of samples.
+    """Decode WAV bytes to 16 kHz mono float32, as Whisper expects.
+
+    Mirrors the guarantees of ``whisper.audio.load_audio``: multi-channel
+    audio is downmixed to mono and any sample rate is resampled to 16 kHz.
+    Skipping either step feeds Whisper a malformed array — a multi-channel
+    array in particular explodes ``log_mel_spectrogram``'s padding into a
+    multi-gigabyte allocation.
     """
     with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+        sample_width = wf.getsampwidth()
+        channels = wf.getnchannels()
+        rate = wf.getframerate()
         raw_data = wf.readframes(wf.getnframes())
-        sw = wf.getsampwidth()
-        dtype = {1: np.uint8, 2: np.int16, 4: np.int32}.get(sw)
-        audio = np.frombuffer(raw_data, dtype=dtype)
-        if wf.getnchannels() > 1:
-            audio = audio.reshape(-1, wf.getnchannels())
-        if not np.issubdtype(audio.dtype, np.floating):
-            audio = audio.astype(np.float32) / float(2 ** (8 * sw - 1))
-        return audio
+
+    dtype = {1: np.uint8, 2: np.int16, 4: np.int32}.get(sample_width)
+    if dtype is None:
+        raise ValueError(f"Unsupported WAV sample width: {sample_width * 8}-bit")
+
+    audio = np.frombuffer(raw_data, dtype=dtype).astype(np.float32)
+
+    # Normalize to [-1, 1]; 8-bit PCM is unsigned with a 128 offset.
+    if dtype == np.uint8:
+        audio = (audio - 128.0) / 128.0
+    else:
+        audio /= float(2 ** (8 * sample_width - 1))
+
+    # Downmix to mono by averaging channels.
+    if channels > 1:
+        audio = audio.reshape(-1, channels).mean(axis=1)
+
+    # Resample to 16 kHz via linear interpolation.
+    if rate != _TARGET_RATE and audio.size:
+        target_len = round(audio.size * _TARGET_RATE / rate)
+        if target_len > 0:
+            audio = np.interp(
+                np.linspace(0.0, audio.size - 1, num=target_len),
+                np.arange(audio.size),
+                audio,
+            ).astype(np.float32)
+
+    return np.ascontiguousarray(audio, dtype=np.float32)
 
 
 @dataclass

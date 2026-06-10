@@ -9,6 +9,7 @@ compute type.
 """
 
 import asyncio
+import io
 import re
 import socket
 import sys
@@ -16,12 +17,15 @@ import wave
 from asyncio.subprocess import DEVNULL, PIPE, Process
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioStart, AudioStop, wav_to_chunks
 from wyoming.event import async_read_event, async_write_event
 from wyoming.info import Describe, Info
+
+from wyoming_whisper_trt.handler import _TARGET_RATE, wav_bytes_to_np_array
 
 _CUDA_AVAILABLE = torch.cuda.is_available()
 
@@ -93,6 +97,41 @@ async def _next_event_of(reader: asyncio.StreamReader, is_type, timeout):
             pytest.fail("Server closed the connection mid-conversation")
         if is_type(event.type):
             return event
+
+
+def _make_wav_bytes(samples: np.ndarray, rate: int, channels: int) -> bytes:
+    """Encode int16 PCM samples (interleaved if multi-channel) as WAV bytes."""
+    buf = io.BytesIO()
+    writer: wave.Wave_write = wave.open(buf, "wb")
+    try:
+        writer.setframerate(rate)
+        writer.setsampwidth(2)
+        writer.setnchannels(channels)
+        writer.writeframes(samples.astype("<i2").tobytes())
+    finally:
+        writer.close()
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("channels", [1, 2])
+@pytest.mark.parametrize("rate", [16000, 44100])
+def test_wav_bytes_to_np_array_normalizes(channels: int, rate: int) -> None:
+    """Any channel count / rate must decode to 1-D 16 kHz mono float32.
+
+    Regression guard for the multi-channel array that exploded
+    log_mel_spectrogram's padding into a multi-gigabyte allocation.
+    """
+    frames = rate  # one second
+    mono = (np.sin(np.linspace(0, 220.0, frames)) * 10000).astype("<i2")
+    interleaved = np.repeat(mono, channels) if channels > 1 else mono
+
+    audio = wav_bytes_to_np_array(_make_wav_bytes(interleaved, rate, channels))
+
+    assert audio.ndim == 1
+    assert audio.dtype == np.float32
+    assert audio.flags["C_CONTIGUOUS"]
+    assert abs(audio.size - _TARGET_RATE) <= 1  # resampled to ~1 s at 16 kHz
+    assert audio.max() <= 1.0 and audio.min() >= -1.0
 
 
 @pytest.mark.asyncio
