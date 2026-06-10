@@ -51,6 +51,12 @@ def _parse_args() -> argparse.Namespace:
         choices=["encoder", "decoder", "both"],
         help="Which engine(s) to inspect",
     )
+    parser.add_argument(
+        "--decoder-mode",
+        default="kv",
+        choices=["kv", "simple"],
+        help="Decoder mode of the cached engine to inspect (default: kv)",
+    )
     parser.add_argument("--json", default=None, help="Write full report to JSON file")
     parser.add_argument(
         "--list-layers",
@@ -157,7 +163,7 @@ def main() -> None:
         set_cache_dir(args.data_dir)
 
     engine_path = Path(get_cache_dir()) / get_model_filename(
-        args.model, args.compute_type
+        args.model, args.compute_type, args.decoder_mode
     )
     if not engine_path.exists():
         raise SystemExit(
@@ -170,13 +176,17 @@ def main() -> None:
     if args.engine in ("encoder", "both"):
         targets.append(("encoder", checkpoint["audio_encoder_engine"]["engine"]))
     if args.engine in ("decoder", "both"):
-        # The decoder is three engines now: cross-K/V projector, prefill, and
-        # the cached single-token step.
-        for name, key in (
-            ("decoder-cross-kv", "cross_kv_engine"),
-            ("decoder-prefill", "prefill_engine"),
-            ("decoder-step", "decoder_step_engine"),
-        ):
+        # "simple" mode is a single decoder engine; "kv" mode is three
+        # (cross-K/V projector, prefill, cached single-token step).
+        if checkpoint.get("decoder_mode") == "simple":
+            decoder_engines = (("decoder", "text_decoder_engine"),)
+        else:
+            decoder_engines = (
+                ("decoder-cross-kv", "cross_kv_engine"),
+                ("decoder-prefill", "prefill_engine"),
+                ("decoder-step", "decoder_step_engine"),
+            )
+        for name, key in decoder_engines:
             targets.append((name, checkpoint[key]["engine"]))
 
     print(f"Engine file: {engine_path} ({engine_path.stat().st_size / 2**20:.1f} MiB)")

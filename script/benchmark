@@ -83,6 +83,12 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--decoder-mode",
+        default="kv",
+        choices=["kv", "simple"],
+        help="Decoder implementation: 'kv' (fast, more VRAM) or 'simple' (lean)",
+    )
+    parser.add_argument(
         "--max-workspace-mb",
         type=int,
         default=None,
@@ -217,25 +223,30 @@ def _enable_detailed_profiling() -> bool:
         return False
 
 
-def _apply_compute_type(compute_type: str, max_workspace_mb: int | None = None) -> None:
+def _apply_builder_config(args: argparse.Namespace, compute_type: str) -> None:
     from whisper_trt.model import WhisperTRTBuilder
 
     WhisperTRTBuilder.quant_mode = compute_type
     WhisperTRTBuilder.fp16_mode = compute_type == "float16"
-    if max_workspace_mb is not None:
-        WhisperTRTBuilder.max_workspace_size = max_workspace_mb << 20
+    WhisperTRTBuilder.decoder_mode = args.decoder_mode
+    if args.max_workspace_mb is not None:
+        WhisperTRTBuilder.max_workspace_size = args.max_workspace_mb << 20
 
 
 def _engine_blob_sizes(engine_path: Path) -> dict[str, int]:
     """Byte sizes of the serialized TRT engines inside a checkpoint.
 
-    The decoder is now three engines (cross-K/V projector, prefill, and the
-    cached step); ``decoder_engine_bytes`` reports their combined footprint.
+    ``decoder_engine_bytes`` is the combined decoder footprint: the three KV
+    engines (cross-K/V projector, prefill, cached step) or the single
+    full-recompute engine, depending on the checkpoint's decoder mode.
     """
     import torch
 
     checkpoint = torch.load(engine_path, map_location="cpu")
-    decoder_keys = ("cross_kv_engine", "prefill_engine", "decoder_step_engine")
+    if checkpoint.get("decoder_mode") == "simple":
+        decoder_keys = ("text_decoder_engine",)
+    else:
+        decoder_keys = ("cross_kv_engine", "prefill_engine", "decoder_step_engine")
     decoder_bytes = sum(len(checkpoint[key]["engine"]) for key in decoder_keys)
     return {
         "encoder_engine_bytes": len(checkpoint["audio_encoder_engine"]["engine"]),
@@ -308,7 +319,7 @@ def _run_single(args: argparse.Namespace) -> dict[str, Any]:
     if args.detailed_build:
         _enable_detailed_profiling()
     compute_type = args.compute_type[0]
-    _apply_compute_type(compute_type, args.max_workspace_mb)
+    _apply_builder_config(args, compute_type)
 
     engine_path = Path(get_cache_dir()) / get_model_filename(args.model, compute_type)
     if args.force_rebuild and engine_path.exists():
@@ -341,6 +352,7 @@ def _run_single(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "model": args.model,
         "compute_type": compute_type,
+        "decoder_mode": args.decoder_mode,
         "engine_path": str(engine_path),
         "engine_cached": was_cached,
         "build_seconds": round(build_seconds, 1) if build_seconds else None,
@@ -378,6 +390,7 @@ def _run_child(args: argparse.Namespace, compute_type: str) -> dict[str, Any] | 
     ]
     if args.data_dir:
         cmd += ["--data-dir", args.data_dir]
+    cmd += ["--decoder-mode", args.decoder_mode]
     if args.max_workspace_mb is not None:
         cmd += ["--max-workspace-mb", str(args.max_workspace_mb)]
     if args.force_rebuild:

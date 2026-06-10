@@ -136,9 +136,16 @@ def test_wav_bytes_to_np_array_normalizes(channels: int, rate: int) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(not _CUDA_AVAILABLE, reason="requires a CUDA GPU")
-@pytest.mark.parametrize("compute_type", ["float16", "int8"])
-async def test_wyoming_whisper_trt(compute_type: str) -> None:
-    """Transcribe a known WAV through the real server over TCP."""
+@pytest.mark.parametrize(
+    ("compute_type", "decoder_mode"),
+    [("float16", "kv"), ("int8", "kv"), ("float16", "simple")],
+)
+async def test_wyoming_whisper_trt(compute_type: str, decoder_mode: str) -> None:
+    """Transcribe a known WAV through the real server over TCP.
+
+    Covers both decoder modes: the KV-cached three-engine decoder and the
+    single-engine "simple" decoder.
+    """
     port = _free_port()
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
@@ -152,6 +159,8 @@ async def test_wyoming_whisper_trt(compute_type: str) -> None:
         str(_LOCAL_DIR),
         "--compute-type",
         compute_type,
+        "--decoder-mode",
+        decoder_mode,
         "--language",
         "en",
         stdin=DEVNULL,
@@ -217,6 +226,6 @@ async def test_wyoming_whisper_trt(compute_type: str) -> None:
 
     if compute_type == "int8":
         # The int8 no-op warning added after benchmarking must be present.
-        assert _INT8_WARNING_FRAGMENT in stderr_buf.decode(errors="replace"), (
-            "Expected the int8 reality-check warning in server logs"
-        )
+        assert _INT8_WARNING_FRAGMENT in stderr_buf.decode(
+            errors="replace"
+        ), "Expected the int8 reality-check warning in server logs"

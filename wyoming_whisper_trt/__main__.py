@@ -281,6 +281,17 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--decoder-mode",
+        default="kv",
+        choices=["kv", "simple"],
+        help=(
+            "Decoder implementation. 'kv' (default) caches attention K/V "
+            "across decode steps: ~2x lower latency, but builds three engines "
+            "that together cost ~600 MiB more VRAM. 'simple' is the original "
+            "single-engine decoder: lower VRAM, slower decode. See README."
+        ),
+    )
+    parser.add_argument(
         "--beam-size",
         type=int,
         default=5,
@@ -291,10 +302,11 @@ def _parse_args() -> argparse.Namespace:
         type=int,
         default=WhisperTRTBuilder.max_workspace_size >> 20,
         help=(
-            "Per-engine TensorRT scratch limit in MiB. The KV-cached decoder "
-            "builds three engines that each reserve workspace, so this scales "
-            "VRAM; lower it on tight-memory devices, raise it if a large model "
-            "fails to build. Changing it requires a rebuilt engine cache."
+            "Per-engine TensorRT build-time scratch budget in MiB. This bounds "
+            "the workspace tactic search may use; it does not control runtime "
+            "VRAM (use --decoder-mode for that). Keep it generous; raise it "
+            "only if a large model fails to build. Changing it rebuilds the "
+            "engine cache."
         ),
     )
     parser.add_argument(
@@ -346,7 +358,13 @@ async def main() -> None:
     # Set compute-type
     _apply_compute_type(args.compute_type)
 
-    # Apply the TensorRT workspace ceiling (scales engine VRAM).
+    # Select the decoder implementation (must precede get_model_filename, which
+    # keys the cache on the decoder mode).
+    WhisperTRTBuilder.decoder_mode = args.decoder_mode
+    logger.debug("Decoder mode set to '%s'.", args.decoder_mode)
+
+    # Apply the TensorRT build-time workspace budget (an OOM escape hatch for
+    # large models; does not control runtime VRAM).
     WhisperTRTBuilder.max_workspace_size = args.max_workspace_mb << 20
     logger.debug("TensorRT max workspace set to %d MiB.", args.max_workspace_mb)
 

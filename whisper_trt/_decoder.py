@@ -304,3 +304,61 @@ class TextDecoderTRTKV(nn.Module):
     def summary(self) -> str:
         """Return a short human-readable component summary."""
         return "TensorRT KV-cached text decoder wrapper"
+
+
+class TextDecoderEngine(nn.Module):
+    """Torch module form of the Whisper decoder blocks for TRT conversion.
+
+    Backs the single-engine "simple" decoder. Unlike the KV path, this runs
+    every decoder block over the whole token prefix on each step, so it can
+    be captured as one engine taking ``(x, xa, mask)``.
+    """
+
+    def __init__(self, blocks: Any) -> None:
+        super().__init__()
+        self.blocks = blocks
+
+    @torch.no_grad()
+    def forward(self, x: Tensor, xa: Tensor, mask: Tensor) -> Tensor:
+        """Run decoder blocks for token features before output projection."""
+        for block in cast(list[Any], self.blocks):
+            x = block(x, xa, mask)
+        return x
+
+    def summary(self) -> str:
+        """Return a short human-readable component summary."""
+        return "Text decoder conversion module"
+
+
+class TextDecoderTRT(nn.Module):
+    """Single-engine Whisper text decoder: full recompute, no KV cache.
+
+    The low-VRAM alternative to ``TextDecoderTRTKV`` — one TensorRT engine
+    context instead of three, trading ~600 MiB of resident VRAM for slower
+    decode (self-attention re-runs the whole prefix every step, O(prefix^2)).
+    Only the final-position output projection is sliced, since greedy
+    decoding consumes just the last token.
+    """
+
+    def __init__(self, engine: Any, state: TextDecoderState) -> None:
+        super().__init__()
+        self.engine = engine
+        self.token_embedding = state.token_embedding
+        self.positional_embedding = state.positional_embedding
+        self.ln = state.ln
+        self.register_buffer("mask", state.mask, persistent=False)
+
+    @torch.no_grad()
+    def forward(self, x: Tensor, xa: Tensor) -> Tensor:
+        """Decode token ids into next-token logits (final position only)."""
+        token_emb = self.token_embedding(x).to(xa.device)
+        pos_emb = self.positional_embedding[: x.shape[-1]].to(xa.device)
+        hidden = token_emb + pos_emb
+        hidden = self.engine(hidden, xa, cast(Tensor, self.mask).to(xa.device))
+        hidden = self.ln(hidden)[:, -1:, :]
+        weight = self.token_embedding.weight.to(hidden.device)
+        return (hidden @ torch.transpose(weight, 0, 1)).float()
+
+    def summary(self) -> str:
+        """Return a short human-readable component summary."""
+        return "TensorRT text decoder wrapper"
