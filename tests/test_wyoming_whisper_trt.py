@@ -11,7 +11,7 @@ import asyncio
 import re
 import sys
 import wave
-from asyncio.subprocess import PIPE
+from asyncio.subprocess import PIPE, Process
 from pathlib import Path
 
 import pytest
@@ -34,11 +34,27 @@ _TRANSCRIBE_TIMEOUT = 120
 _INT8_WARNING_FRAGMENT = "int8 requests TensorRT implicit INT8"
 
 
-async def _next_event_of(is_type, reader, timeout):
-    """Read events until one matches the given Wyoming type predicate."""
+async def _drain(stream: asyncio.StreamReader, buf: bytearray) -> None:
+    """Continuously read a stream into a buffer so the pipe never fills."""
     while True:
-        event = await asyncio.wait_for(async_read_event(reader), timeout=timeout)
-        assert event is not None
+        chunk = await stream.read(4096)
+        if not chunk:
+            return
+        buf.extend(chunk)
+
+
+async def _next_event_of(proc: Process, stderr_buf: bytearray, is_type, timeout):
+    """Read events until one matches; fail with server stderr on EOF."""
+    assert proc.stdout is not None
+    while True:
+        event = await asyncio.wait_for(async_read_event(proc.stdout), timeout=timeout)
+        if event is None:
+            proc.terminate()
+            await proc.wait()
+            pytest.fail(
+                "Server event stream ended unexpectedly; stderr tail:\n"
+                + stderr_buf.decode(errors="replace")[-2000:]
+            )
         if is_type(event.type):
             return event
 
@@ -71,46 +87,57 @@ async def test_wyoming_whisper_trt(compute_type: str) -> None:
         stderr=PIPE,
         cwd=_PROGRAM_DIR,
     )
-    assert proc.stdin is not None and proc.stdout is not None
+    assert proc.stdin is not None and proc.stderr is not None
 
-    # Protocol sanity: the server must describe at least one ASR model.
-    await async_write_event(Describe().event(), proc.stdin)
-    info = Info.from_event(
-        await _next_event_of(Info.is_type, proc.stdout, _INFO_TIMEOUT)
-    )
-    assert len(info.asr) == 1, "Expected one asr service"
-    assert len(info.asr[0].models) > 0, "Expected at least one model"
+    # Drain stderr in the background: logs (and any engine-build output) can
+    # exceed the pipe buffer and would otherwise deadlock the server.
+    stderr_buf = bytearray()
+    drain_task = asyncio.create_task(_drain(proc.stderr, stderr_buf))
 
-    # Transcribe a known WAV.
-    await async_write_event(Transcribe(language="en").event(), proc.stdin)
-    with wave.open(str(_DIR / "turn_on_the_living_room_lamp.wav"), "rb") as wav:
-        await async_write_event(
-            AudioStart(
-                rate=wav.getframerate(),
-                width=wav.getsampwidth(),
-                channels=wav.getnchannels(),
-            ).event(),
-            proc.stdin,
-        )
-        for chunk in wav_to_chunks(wav, _SAMPLES_PER_CHUNK):
-            await async_write_event(chunk.event(), proc.stdin)
-        await async_write_event(AudioStop().event(), proc.stdin)
-
-    transcript = Transcript.from_event(
-        await _next_event_of(Transcript.is_type, proc.stdout, _TRANSCRIBE_TIMEOUT)
-    )
-    text = re.sub(r"[^a-z ]", "", transcript.text.lower().strip())
-    assert text == "turn on the living room lamp"
-
-    proc.stdin.close()
     try:
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-    except TimeoutError:
-        proc.terminate()
-        _, stderr = await proc.communicate()
+        # Protocol sanity: the server must describe at least one ASR model.
+        await async_write_event(Describe().event(), proc.stdin)
+        info = Info.from_event(
+            await _next_event_of(proc, stderr_buf, Info.is_type, _INFO_TIMEOUT)
+        )
+        assert len(info.asr) == 1, "Expected one asr service"
+        assert len(info.asr[0].models) > 0, "Expected at least one model"
+
+        # Transcribe a known WAV.
+        await async_write_event(Transcribe(language="en").event(), proc.stdin)
+        wav_path = _DIR / "turn_on_the_living_room_lamp.wav"
+        with wave.open(str(wav_path), "rb") as wav:
+            await async_write_event(
+                AudioStart(
+                    rate=wav.getframerate(),
+                    width=wav.getsampwidth(),
+                    channels=wav.getnchannels(),
+                ).event(),
+                proc.stdin,
+            )
+            for chunk in wav_to_chunks(wav, _SAMPLES_PER_CHUNK):
+                await async_write_event(chunk.event(), proc.stdin)
+            await async_write_event(AudioStop().event(), proc.stdin)
+
+        transcript = Transcript.from_event(
+            await _next_event_of(
+                proc, stderr_buf, Transcript.is_type, _TRANSCRIBE_TIMEOUT
+            )
+        )
+        text = re.sub(r"[^a-z ]", "", transcript.text.lower().strip())
+        assert text == "turn on the living room lamp"
+    finally:
+        if proc.returncode is None:
+            proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=30)
+            except TimeoutError:
+                proc.kill()
+                await proc.wait()
+        await drain_task
 
     if compute_type == "int8":
         # The int8 no-op warning added after benchmarking must be present.
-        assert _INT8_WARNING_FRAGMENT in stderr.decode(), (
+        assert _INT8_WARNING_FRAGMENT in stderr_buf.decode(errors="replace"), (
             "Expected the int8 reality-check warning in server logs"
         )

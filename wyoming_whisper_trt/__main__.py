@@ -56,7 +56,9 @@ def setup_logging(debug: bool, log_format: str) -> None:
         log_format (str): Format string for log messages.
     """
     formatter = NanosecondFormatter(log_format)
-    handler = logging.StreamHandler(sys.stdout)
+    # Log to stderr: with --uri stdio:// the Wyoming protocol owns stdout,
+    # and any log line written there corrupts the event stream.
+    handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(formatter)
 
     root_logger = logging.getLogger()
