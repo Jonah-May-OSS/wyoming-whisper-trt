@@ -220,9 +220,27 @@ and the venv created by `script/setup`:
 # so they work with the system python on the shebang line.
 ```
 
-Note that `int8` is experimental mixed precision (INT8 encoder, FP16
-decoder); benchmark before assuming it saves VRAM on your model size — on
-`tiny`/`base` the encoder is small enough that it typically does not.
+#### A note on `int8`
+
+`COMPUTE_TYPE=int8` requests TensorRT *implicit* INT8 quantization for the
+encoder (the decoder always stays FP16). Implicit quantization is per-layer
+optional — TensorRT only uses INT8 where it times faster than FP16 — and it
+is deprecated in TensorRT 10. Measured with the tools above:
+
+| `base`, 300 utterances (RTX 3050, TensorRT 10.16) | float16 | int8 |
+|---|---|---|
+| WER | 5.36 % | 5.36 % |
+| Latency p95 | 0.258 s | 0.255 s |
+| VRAM (nvidia-smi) | 432 MiB | 438 MiB |
+| Encoder engine size | 40.1 MiB | 40.2 MiB |
+| INT8 layers in engine | — | 0 of 105 |
+| Engine build time | 98 s | 159 s |
+
+In other words: on this hardware the int8 engine is identical to float16 and
+just takes longer to build. Other GPU/TensorRT combinations may behave
+differently — run `script/layer_report` on your own hardware before assuming
+any benefit. Guaranteed quantization would require explicit Q/DQ (e.g. via
+nvidia-modelopt), which only pays off on `medium`/`large` encoders.
 
 ### Testing and Linting Tools
 

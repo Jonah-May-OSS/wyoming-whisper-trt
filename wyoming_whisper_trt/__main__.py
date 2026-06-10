@@ -222,16 +222,19 @@ async def run_server(
 def _apply_compute_type(compute_type: str) -> None:
     """Configure the builder for the requested compute type.
 
-    Warns when the experimental int8 path is selected (encoder INT8 +
-    FP16 decoder).
+    Warns when int8 is selected, since TensorRT is free to ignore the
+    request (implicit quantization is per-layer optional).
     """
     WhisperTRTBuilder.quant_mode = compute_type
     WhisperTRTBuilder.fp16_mode = compute_type == "float16"
     if compute_type == "int8":
         logger.warning(
-            "int8 is experimental: the encoder is quantized to INT8 (calibrated "
-            "on a bundled speech clip) and the decoder runs FP16. Accuracy can "
-            "differ from float16; benefits are largest on medium/large models."
+            "int8 requests TensorRT implicit INT8 quantization for the encoder "
+            "(the decoder always runs FP16), but TensorRT only uses INT8 where "
+            "it beats FP16. Measured on TensorRT 10 (RTX 3050, model 'base') "
+            "the result was identical to float16 — zero INT8 layers, same "
+            "accuracy and VRAM — with a slower engine build. Verify with "
+            "script/layer_report before assuming any benefit."
         )
 
 
@@ -269,9 +272,10 @@ async def main() -> None:
         default="float16",
         choices=["float32", "float16", "int8"],
         help=(
-            "Compute type (float32, float16, int8). int8 is experimental and "
-            "mixed-precision: the encoder runs INT8 (calibrated on a bundled "
-            "speech clip) and the decoder runs FP16."
+            "Compute type (float32, float16, int8). int8 requests an "
+            "INT8-calibrated encoder (decoder stays FP16), but TensorRT may "
+            "choose FP16 for every layer anyway; measured on TensorRT 10 the "
+            "engine came out identical to float16. See README."
         ),
     )
     parser.add_argument(

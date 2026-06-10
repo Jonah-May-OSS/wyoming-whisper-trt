@@ -551,9 +551,11 @@ class WhisperTRTBuilder:
         """Return the effective compute type based on builder configuration.
 
         Reconciles ``quant_mode`` and ``fp16_mode`` into a single canonical
-        string used to key on-disk engine filenames. Note that "int8" denotes a
-        mixed-precision build (INT8 encoder + FP16 decoder), not a fully INT8
-        model — see ``build_text_decoder_engine``.
+        string used to key on-disk engine filenames. Note that "int8" denotes
+        a *request* for an INT8-calibrated encoder (the decoder always stays
+        FP16); TensorRT implicit quantization is per-layer optional, so the
+        built engine may contain no INT8 layers at all — see
+        ``build_audio_encoder_engine``.
 
         Returns:
             str: "int8" when ``quant_mode == "int8"``;
@@ -649,6 +651,15 @@ class WhisperTRTBuilder:
         int8_mode = cls.quant_mode == "int8"
         # Calibrate INT8 activation ranges on real speech mels rather than
         # letting torch2trt fall back to the random trace inputs.
+        #
+        # Caveat (measured): this is TensorRT *implicit* quantization, which
+        # treats INT8 as optional per layer — TensorRT only picks an INT8
+        # tactic where it times faster than FP16. On TensorRT 10.16 / RTX
+        # 3050 with model 'base', every layer came out FP16 and the engine
+        # was identical to a float16 build (verify with script/layer_report).
+        # Implicit quantization is deprecated in TensorRT 10; guaranteed INT8
+        # would need explicit Q/DQ quantization, worthwhile only for
+        # medium/large encoders.
         int8_calib_dataset = (
             _encoder_int8_calib_dataset(dims.n_mels, n_frames, positional_embedding)
             if int8_mode
