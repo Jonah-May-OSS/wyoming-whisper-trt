@@ -33,6 +33,7 @@ from typing import Any
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROGRAM_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(PROGRAM_DIR))
+sys.path.insert(0, str(SCRIPT_DIR))
 
 _RESULT_MARKER = "BENCHMARK_RESULT_JSON:"
 
@@ -416,6 +417,9 @@ def _print_table(results: list[dict[str, Any]]) -> None:
 
 def main() -> None:
     """Run the requested compute types and print the comparison table."""
+    from _common import ensure_venv_python
+
+    ensure_venv_python(str(Path(__file__).resolve()))
     args = _parse_args()
 
     if args.single:

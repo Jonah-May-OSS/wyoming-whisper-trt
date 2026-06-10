@@ -20,5 +20,14 @@
   "reportUnnecessaryIsInstance": "none",
   "exclude": [
     "torch2trt"
+  ],
+  "executionEnvironments": [
+    {
+      "root": "script",
+      "extraPaths": [
+        "script",
+        "."
+      ]
+    }
   ]
 }

@@ -28,6 +28,7 @@ from typing import Any
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROGRAM_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(PROGRAM_DIR))
+sys.path.insert(0, str(SCRIPT_DIR))
 
 
 def _parse_args() -> argparse.Namespace:
@@ -142,6 +143,9 @@ def _print_report(report: dict[str, Any], list_layers: bool) -> None:
 
 def main() -> None:
     """Locate the cached engine file and report each engine's precisions."""
+    from _common import ensure_venv_python
+
+    ensure_venv_python(str(Path(__file__).resolve()))
     args = _parse_args()
 
     import torch

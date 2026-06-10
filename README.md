@@ -203,19 +203,21 @@ and the venv created by `script/setup`:
 # One-time: build an eval set from LibriSpeech test-clean (~346 MB download,
 # CC BY 4.0). Any folder of .wav/.flac files with sibling .txt transcripts
 # also works.
-.venv/bin/python script/prepare_eval_set --output ./eval
+./script/prepare_eval_set --output ./eval
 
 # Compare compute types. Each runs in its own subprocess so VRAM numbers are
 # clean; engines are cached per compute type under --data-dir.
-.venv/bin/python script/benchmark --model base --compute-type float16 int8 \
+./script/benchmark --model base --compute-type float16 int8 \
     --eval-dir ./eval --data-dir ./local --json results.json
 
 # Check which layers actually run INT8. Per-layer precision is only recorded
 # when the engine was built with --detailed-build.
-.venv/bin/python script/benchmark --model base --compute-type int8 \
+./script/benchmark --model base --compute-type int8 \
     --eval-dir ./eval --data-dir ./local --detailed-build --force-rebuild
-.venv/bin/python script/layer_report --model base --compute-type int8 \
-    --data-dir ./local
+./script/layer_report --model base --compute-type int8 --data-dir ./local
+
+# benchmark and layer_report re-exec themselves into .venv automatically,
+# so they work with the system python on the shebang line.
 ```
 
 Note that `int8` is experimental mixed precision (INT8 encoder, FP16
