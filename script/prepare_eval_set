@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""Prepare a WER evaluation set for script/benchmark from LibriSpeech.
+
+Downloads the LibriSpeech test-clean archive (~346 MB, CC BY 4.0), extracts
+it, and lays out a flat eval directory of <id>.flac + <id>.txt pairs that
+script/benchmark consumes. Selection is deterministic (sorted utterance ids,
+evenly strided) so two machines pick identical subsets.
+
+You can also skip this script entirely and hand-build an eval dir: any
+folder of .wav/.flac files with sibling .txt transcripts works.
+
+Example:
+    .venv/bin/python script/prepare_eval_set --output ./eval --max-utterances 300
+"""
+
+import argparse
+import contextlib
+import shutil
+import sys
+import tarfile
+import urllib.request
+from pathlib import Path
+
+LIBRISPEECH_URLS = {
+    "test-clean": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+    "test-other": "https://www.openslr.org/resources/12/test-other.tar.gz",
+}
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+    parser.add_argument(
+        "--output", default="./eval", help="Eval directory to create (default: ./eval)"
+    )
+    parser.add_argument(
+        "--subset",
+        default="test-clean",
+        choices=sorted(LIBRISPEECH_URLS),
+        help="LibriSpeech subset (default: test-clean)",
+    )
+    parser.add_argument(
+        "--max-utterances",
+        type=int,
+        default=300,
+        help="Number of utterances to include (0 = all; default: 300)",
+    )
+    parser.add_argument(
+        "--keep-archive",
+        action="store_true",
+        help="Keep the downloaded tarball and extracted tree under <output>/.download",
+    )
+    return parser.parse_args()
+
+
+def _download(url: str, dest: Path) -> None:
+    if dest.exists():
+        print(f"Archive already present: {dest}")
+        return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    print(f"Downloading {url} -> {dest}")
+
+    def _progress(blocks: int, block_size: int, total: int) -> None:
+        if total > 0 and blocks % 200 == 0:
+            done = min(blocks * block_size, total)
+            sys.stderr.write(f"\r  {done / 2**20:.0f} / {total / 2**20:.0f} MiB")
+            sys.stderr.flush()
+
+    tmp = dest.with_suffix(".part")
+    urllib.request.urlretrieve(url, tmp, reporthook=_progress)
+    tmp.rename(dest)
+    sys.stderr.write("\n")
+
+
+def _extract(archive: Path, dest: Path, subset: str) -> Path:
+    extracted_root = dest / "LibriSpeech" / subset
+    if extracted_root.exists():
+        print(f"Already extracted: {extracted_root}")
+        return extracted_root
+    print(f"Extracting {archive} ...")
+    with tarfile.open(archive, "r:gz") as tar:
+        tar.extractall(dest, filter="data")
+    return extracted_root
+
+
+def _collect_utterances(subset_root: Path) -> list[tuple[Path, str]]:
+    """Return sorted (flac_path, transcript) pairs from a LibriSpeech tree."""
+    pairs: list[tuple[Path, str]] = []
+    for trans_file in sorted(subset_root.rglob("*.trans.txt")):
+        chapter_dir = trans_file.parent
+        for line in trans_file.read_text(encoding="utf-8").splitlines():
+            utt_id, _, text = line.partition(" ")
+            if not text:
+                continue
+            flac = chapter_dir / f"{utt_id}.flac"
+            if flac.exists():
+                pairs.append((flac, text.strip()))
+    pairs.sort(key=lambda pair: pair[0].name)
+    return pairs
+
+
+def main() -> None:
+    """Download, subset, and lay out the eval directory."""
+    args = _parse_args()
+    output = Path(args.output).resolve()
+    download_dir = output / ".download"
+
+    url = LIBRISPEECH_URLS[args.subset]
+    archive = download_dir / Path(url).name
+    _download(url, archive)
+    subset_root = _extract(archive, download_dir, args.subset)
+
+    pairs = _collect_utterances(subset_root)
+    if not pairs:
+        raise SystemExit(f"No utterances found under {subset_root}")
+    print(f"Found {len(pairs)} utterances in {args.subset}")
+
+    if args.max_utterances > 0 and len(pairs) > args.max_utterances:
+        # Evenly strided subset across the sorted list: deterministic and
+        # spans the full speaker range rather than the first N chapters.
+        stride = len(pairs) / args.max_utterances
+        pairs = [pairs[int(i * stride)] for i in range(args.max_utterances)]
+
+    output.mkdir(parents=True, exist_ok=True)
+    for flac, text in pairs:
+        shutil.copy2(flac, output / flac.name)
+        (output / flac.name).with_suffix(".txt").write_text(
+            text + "\n", encoding="utf-8"
+        )
+    print(f"Wrote {len(pairs)} utterance pairs to {output}")
+
+    if not args.keep_archive:
+        shutil.rmtree(download_dir / "LibriSpeech", ignore_errors=True)
+        archive.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            download_dir.rmdir()
+        print("Cleaned up download artifacts (use --keep-archive to retain)")
+
+
+if __name__ == "__main__":
+    main()

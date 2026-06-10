@@ -1,0 +1,438 @@
+#!/usr/bin/env python3
+"""Benchmark WhisperTRT compute types: WER, latency, VRAM, build time.
+
+Runs each requested compute type in a separate subprocess so CUDA context,
+engine memory, and WhisperTRTBuilder class state are fully isolated, then
+prints a comparison table.
+
+Eval set format: a directory of audio files (*.wav / *.flac) each with a
+sibling *.txt reference transcript. Build one with script/prepare_eval_set.
+
+Example (from the repo root, after script/setup):
+    .venv/bin/python script/benchmark \
+        --model base --compute-type float16 int8 \
+        --eval-dir ./eval --data-dir ./local --json results.json
+"""
+
+# Heavy CUDA-touching imports (torch, tensorrt, whisper, whisper_trt) are
+# deferred into functions: the parent orchestrator and --help must never
+# initialize CUDA — only the --single child process may.
+# pylint: disable=import-outside-toplevel
+
+import argparse
+import json
+import logging
+import os
+import statistics
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROGRAM_DIR = SCRIPT_DIR.parent
+sys.path.insert(0, str(PROGRAM_DIR))
+
+_RESULT_MARKER = "BENCHMARK_RESULT_JSON:"
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+logger = logging.getLogger("benchmark")
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+    parser.add_argument("--model", default="base", help="Whisper model name")
+    parser.add_argument(
+        "--compute-type",
+        nargs="+",
+        default=["float16", "int8"],
+        choices=["float32", "float16", "int8"],
+        help="Compute types to benchmark (each runs in its own subprocess)",
+    )
+    parser.add_argument(
+        "--eval-dir",
+        required=True,
+        help="Directory of audio files with sibling .txt reference transcripts",
+    )
+    parser.add_argument(
+        "--data-dir",
+        default=None,
+        help="Engine cache directory (default: ~/.cache/whisper_trt)",
+    )
+    parser.add_argument(
+        "--language", default="en", help="Transcription language (default: en)"
+    )
+    parser.add_argument(
+        "--limit", type=int, default=0, help="Max eval utterances (0 = all)"
+    )
+    parser.add_argument(
+        "--force-rebuild",
+        action="store_true",
+        help="Delete the cached engine for each compute type and rebuild",
+    )
+    parser.add_argument(
+        "--detailed-build",
+        action="store_true",
+        help=(
+            "Build engines with TensorRT DETAILED profiling verbosity so "
+            "script/layer_report can show per-layer precision. Implies a "
+            "rebuild if combined with --force-rebuild; cached engines built "
+            "without it stay name-only."
+        ),
+    )
+    parser.add_argument("--json", default=None, help="Write results to a JSON file")
+    parser.add_argument(
+        "--single",
+        action="store_true",
+        help=argparse.SUPPRESS,  # internal: run one compute type in-process
+    )
+    return parser.parse_args()
+
+
+# ---------------------------------------------------------------------------
+# WER
+# ---------------------------------------------------------------------------
+
+
+def _word_edit_distance(ref: list[str], hyp: list[str]) -> int:
+    """Levenshtein distance over word lists."""
+    if not ref:
+        return len(hyp)
+    if not hyp:
+        return len(ref)
+    prev = list(range(len(hyp) + 1))
+    for i, ref_word in enumerate(ref, start=1):
+        cur = [i] + [0] * len(hyp)
+        for j, hyp_word in enumerate(hyp, start=1):
+            cost = 0 if ref_word == hyp_word else 1
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+        prev = cur
+    return prev[-1]
+
+
+def _make_normalizer(language: str):
+    from whisper.normalizers import BasicTextNormalizer, EnglishTextNormalizer
+
+    if language in ("en", "auto"):
+        return EnglishTextNormalizer()
+    return BasicTextNormalizer()
+
+
+# ---------------------------------------------------------------------------
+# VRAM
+# ---------------------------------------------------------------------------
+
+
+def _nvidia_smi_process_mib() -> float | None:
+    """Return this process's GPU memory in MiB per nvidia-smi, or None."""
+    try:
+        out = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-compute-apps=pid,used_gpu_memory",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    pid = os.getpid()
+    for line in out.strip().splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) == 2 and parts[0].isdigit() and int(parts[0]) == pid:
+            try:
+                return float(parts[1])
+            except ValueError:
+                return None
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Eval set
+# ---------------------------------------------------------------------------
+
+
+def _load_eval_set(eval_dir: Path, limit: int) -> list[tuple[Path, str]]:
+    """Return (audio_path, reference_text) pairs, sorted for determinism."""
+    pairs: list[tuple[Path, str]] = []
+    audio_files = sorted(
+        p for p in eval_dir.iterdir() if p.suffix.lower() in (".wav", ".flac")
+    )
+    for audio in audio_files:
+        ref_path = audio.with_suffix(".txt")
+        if not ref_path.exists():
+            logger.warning("No transcript for %s; skipping", audio.name)
+            continue
+        pairs.append((audio, ref_path.read_text(encoding="utf-8").strip()))
+    if not pairs:
+        raise SystemExit(
+            f"No (audio, .txt) pairs found in {eval_dir}. "
+            "Run script/prepare_eval_set first."
+        )
+    if limit > 0:
+        pairs = pairs[:limit]
+    return pairs
+
+
+# ---------------------------------------------------------------------------
+# Single-compute-type run (child process)
+# ---------------------------------------------------------------------------
+
+
+def _enable_detailed_profiling() -> bool:
+    """Patch TensorRT so built engines carry per-layer precision info."""
+    try:
+        import tensorrt as trt
+
+        orig_builder = trt.Builder
+
+        # pylint: disable-next=too-few-public-methods
+        class _DetailedBuilder(orig_builder):  # type: ignore[misc,valid-type]
+            def create_builder_config(self, *a, **k):
+                """Create a builder config with DETAILED profiling verbosity."""
+                config = super().create_builder_config(*a, **k)
+                config.profiling_verbosity = trt.ProfilingVerbosity.DETAILED
+                return config
+
+        trt.Builder = _DetailedBuilder
+        return True
+    # pylint: disable-next=broad-exception-caught  # best-effort, never fatal
+    except Exception as exc:
+        logger.warning("Could not enable DETAILED profiling verbosity: %s", exc)
+        return False
+
+
+def _apply_compute_type(compute_type: str) -> None:
+    from whisper_trt.model import WhisperTRTBuilder
+
+    WhisperTRTBuilder.quant_mode = compute_type
+    WhisperTRTBuilder.fp16_mode = compute_type == "float16"
+
+
+def _engine_blob_sizes(engine_path: Path) -> dict[str, int]:
+    """Byte sizes of the serialized TRT engines inside a checkpoint."""
+    import torch
+
+    checkpoint = torch.load(engine_path, map_location="cpu")
+    return {
+        "encoder_engine_bytes": len(checkpoint["audio_encoder_engine"]["engine"]),
+        "decoder_engine_bytes": len(checkpoint["text_decoder_engine"]["engine"]),
+    }
+
+
+def _transcribe_one(
+    model: Any,
+    audio_path: Path,
+    reference: str,
+    normalizer: Any,
+    language: str,
+) -> dict[str, Any]:
+    """Transcribe one clip and score it against its reference transcript."""
+    import whisper
+
+    audio = whisper.audio.load_audio(str(audio_path))
+    start = time.perf_counter()
+    result = model.transcribe(audio, language=language)
+    latency = time.perf_counter() - start
+
+    ref_words = normalizer(reference).split()
+    hyp_words = normalizer(result["text"]).split()
+    return {
+        "file": audio_path.name,
+        "latency_s": round(latency, 4),
+        "edits": _word_edit_distance(ref_words, hyp_words),
+        "ref_words": len(ref_words),
+        "audio_s": round(len(audio) / whisper.audio.SAMPLE_RATE, 2),
+    }
+
+
+def _score_eval_set(
+    model: Any, pairs: list[tuple[Path, str]], language: str
+) -> list[dict[str, Any]]:
+    """Score every eval pair, sharing one text normalizer across clips."""
+    normalizer = _make_normalizer(language)
+    return [
+        _transcribe_one(model, audio_path, reference, normalizer, language)
+        for audio_path, reference in pairs
+    ]
+
+
+def _aggregate_scores(scores: list[dict[str, Any]]) -> dict[str, Any]:
+    """Corpus-level WER and latency statistics from per-file scores."""
+    latencies = sorted(score["latency_s"] for score in scores)
+    total_edits = sum(score["edits"] for score in scores)
+    total_ref_words = sum(score["ref_words"] for score in scores)
+    total_audio_seconds = sum(score["audio_s"] for score in scores)
+    p95_index = max(0, int(len(latencies) * 0.95) - 1)
+    return {
+        "wer_percent": round(100.0 * total_edits / max(total_ref_words, 1), 2),
+        "latency_mean_s": round(statistics.fmean(latencies), 4),
+        "latency_p50_s": round(statistics.median(latencies), 4),
+        "latency_p95_s": round(latencies[p95_index], 4),
+        "realtime_factor": round(total_audio_seconds / max(sum(latencies), 1e-9), 2),
+    }
+
+
+def _run_single(args: argparse.Namespace) -> dict[str, Any]:
+    """Build/load one compute type, run the eval set, and return metrics."""
+    import torch
+
+    from whisper_trt.cache import get_cache_dir, set_cache_dir
+    from whisper_trt.model import get_model_filename, load_trt_model
+
+    if args.data_dir:
+        set_cache_dir(args.data_dir)
+    if args.detailed_build:
+        _enable_detailed_profiling()
+    compute_type = args.compute_type[0]
+    _apply_compute_type(compute_type)
+
+    engine_path = Path(get_cache_dir()) / get_model_filename(args.model, compute_type)
+    if args.force_rebuild and engine_path.exists():
+        logger.info("Removing cached engine %s", engine_path)
+        engine_path.unlink()
+
+    # Build (timed only when the engine is not cached)
+    was_cached = engine_path.exists()
+    start = time.perf_counter()
+    model = load_trt_model(args.model, language=args.language)
+    build_seconds = None if was_cached else time.perf_counter() - start
+
+    pairs = _load_eval_set(Path(args.eval_dir), args.limit)
+
+    # Warmup on the first clip so lazy buffer allocation doesn't pollute timing
+    model.transcribe(str(pairs[0][0]), language=args.language)
+    torch.cuda.synchronize()
+    torch.cuda.reset_peak_memory_stats()
+    vram_after_warmup_mib = _nvidia_smi_process_mib()
+
+    scores = _score_eval_set(model, pairs, args.language)
+
+    return {
+        "model": args.model,
+        "compute_type": compute_type,
+        "engine_path": str(engine_path),
+        "engine_cached": was_cached,
+        "build_seconds": round(build_seconds, 1) if build_seconds else None,
+        **_engine_blob_sizes(engine_path),
+        "utterances": len(pairs),
+        **_aggregate_scores(scores),
+        "vram_nvidia_smi_mib": vram_after_warmup_mib,
+        "vram_torch_allocated_mib": round(torch.cuda.memory_allocated() / 2**20, 1),
+        "vram_torch_peak_mib": round(torch.cuda.max_memory_allocated() / 2**20, 1),
+        "per_file": scores,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator (parent process)
+# ---------------------------------------------------------------------------
+
+
+def _run_child(args: argparse.Namespace, compute_type: str) -> dict[str, Any] | None:
+    """Benchmark one compute type in a subprocess and parse its result."""
+    cmd = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--single",
+        "--model",
+        args.model,
+        "--compute-type",
+        compute_type,
+        "--eval-dir",
+        args.eval_dir,
+        "--language",
+        args.language,
+        "--limit",
+        str(args.limit),
+    ]
+    if args.data_dir:
+        cmd += ["--data-dir", args.data_dir]
+    if args.force_rebuild:
+        cmd.append("--force-rebuild")
+    if args.detailed_build:
+        cmd.append("--detailed-build")
+
+    logger.info("=== %s: launching subprocess ===", compute_type)
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    sys.stderr.write(proc.stderr)
+    result = None
+    for line in proc.stdout.splitlines():
+        if line.startswith(_RESULT_MARKER):
+            result = json.loads(line[len(_RESULT_MARKER) :])
+        else:
+            print(line)
+    if proc.returncode != 0 or result is None:
+        logger.error(
+            "%s benchmark failed (exit %s); see output above",
+            compute_type,
+            proc.returncode,
+        )
+        return None
+    return result
+
+
+_TABLE_ROWS = [
+    ("WER %", "wer_percent"),
+    ("Latency mean (s)", "latency_mean_s"),
+    ("Latency p95 (s)", "latency_p95_s"),
+    ("Realtime factor", "realtime_factor"),
+    ("VRAM nvidia-smi (MiB)", "vram_nvidia_smi_mib"),
+    ("VRAM torch alloc (MiB)", "vram_torch_allocated_mib"),
+    ("VRAM torch peak (MiB)", "vram_torch_peak_mib"),
+    ("Encoder engine (MiB)", "encoder_engine_bytes"),
+    ("Decoder engine (MiB)", "decoder_engine_bytes"),
+    ("Build time (s)", "build_seconds"),
+]
+
+
+def _format_cell(key: str, value: Any) -> str:
+    if value is None:
+        return "-"
+    if key.endswith("_bytes"):
+        return f"{value / 2**20:.1f}"
+    return str(value)
+
+
+def _print_table(results: list[dict[str, Any]]) -> None:
+    label_width = max(len(label) for label, _ in _TABLE_ROWS) + 2
+    col_width = 14
+    header = "".ljust(label_width) + "".join(
+        r["compute_type"].rjust(col_width) for r in results
+    )
+    print()
+    print(f"Model: {results[0]['model']}  Utterances: {results[0]['utterances']}")
+    print(header)
+    print("-" * len(header))
+    for label, key in _TABLE_ROWS:
+        cells = "".join(_format_cell(key, r.get(key)).rjust(col_width) for r in results)
+        print(label.ljust(label_width) + cells)
+    print()
+
+
+def main() -> None:
+    """Run the requested compute types and print the comparison table."""
+    args = _parse_args()
+
+    if args.single:
+        result = _run_single(args)
+        print(_RESULT_MARKER + json.dumps(result))
+        return
+
+    results = [r for ct in args.compute_type if (r := _run_child(args, ct)) is not None]
+    if not results:
+        raise SystemExit("All benchmark runs failed.")
+
+    _print_table(results)
+
+    if args.json:
+        Path(args.json).write_text(json.dumps(results, indent=2), encoding="utf-8")
+        logger.info("Wrote %s", args.json)
+
+
+if __name__ == "__main__":
+    main()

@@ -193,6 +193,35 @@ python script/lint
 python script/test
 ```
 
+### Benchmarking compute types
+
+To compare `float32` / `float16` / `int8` on real hardware (WER, latency,
+VRAM, engine sizes), three helper scripts are included. They need a CUDA GPU
+and the venv created by `script/setup`:
+
+```bash
+# One-time: build an eval set from LibriSpeech test-clean (~346 MB download,
+# CC BY 4.0). Any folder of .wav/.flac files with sibling .txt transcripts
+# also works.
+.venv/bin/python script/prepare_eval_set --output ./eval
+
+# Compare compute types. Each runs in its own subprocess so VRAM numbers are
+# clean; engines are cached per compute type under --data-dir.
+.venv/bin/python script/benchmark --model base --compute-type float16 int8 \
+    --eval-dir ./eval --data-dir ./local --json results.json
+
+# Check which layers actually run INT8. Per-layer precision is only recorded
+# when the engine was built with --detailed-build.
+.venv/bin/python script/benchmark --model base --compute-type int8 \
+    --eval-dir ./eval --data-dir ./local --detailed-build --force-rebuild
+.venv/bin/python script/layer_report --model base --compute-type int8 \
+    --data-dir ./local
+```
+
+Note that `int8` is experimental mixed precision (INT8 encoder, FP16
+decoder); benchmark before assuming it saves VRAM on your model size — on
+`tiny`/`base` the encoder is small enough that it typically does not.
+
 ### Testing and Linting Tools
 
 This project uses modern Python development tools:

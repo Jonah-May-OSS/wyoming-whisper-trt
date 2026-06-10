@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""Report per-layer precision of a cached WhisperTRT engine.
+
+Answers "did INT8 actually take?" by deserializing the TensorRT engines
+inside a cached checkpoint and dumping which layers run INT8 vs FP16/FP32.
+
+Per-layer precision is only recorded when the engine was built with
+DETAILED profiling verbosity — build with:
+    script/benchmark --detailed-build --force-rebuild ...
+Engines built without it still report layer counts and engine blob sizes.
+
+Example:
+    .venv/bin/python script/layer_report --model base --compute-type int8 \
+        --data-dir ./local
+"""
+
+# torch and tensorrt are deliberately imported inside functions so --help
+# and argument errors never pay the CUDA initialization cost.
+# pylint: disable=import-outside-toplevel
+
+import argparse
+import json
+import sys
+from collections import Counter
+from pathlib import Path
+from typing import Any
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROGRAM_DIR = SCRIPT_DIR.parent
+sys.path.insert(0, str(PROGRAM_DIR))
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+    parser.add_argument("--model", default="base", help="Whisper model name")
+    parser.add_argument(
+        "--compute-type",
+        default="int8",
+        choices=["float32", "float16", "int8"],
+        help="Compute type of the cached engine to inspect",
+    )
+    parser.add_argument(
+        "--data-dir",
+        help="Engine cache directory to inspect (default: ~/.cache/whisper_trt)",
+        default=None,
+    )
+    parser.add_argument(
+        "--engine",
+        default="both",
+        choices=["encoder", "decoder", "both"],
+        help="Which engine(s) to inspect",
+    )
+    parser.add_argument("--json", default=None, help="Write full report to JSON file")
+    parser.add_argument(
+        "--list-layers",
+        action="store_true",
+        help="Print every layer with its precision (verbose)",
+    )
+    return parser.parse_args()
+
+
+def _layer_precision(layer: dict[str, Any]) -> str:
+    """Best-effort precision of one layer from inspector JSON."""
+    for key in ("Precision", "precision"):
+        if key in layer:
+            return str(layer[key])
+    outputs = layer.get("Outputs") or []
+    if outputs and isinstance(outputs[0], dict):
+        fmt = outputs[0].get("Format/Datatype") or outputs[0].get("Datatype")
+        if fmt:
+            return str(fmt).split()[-1]
+    return "unknown"
+
+
+def _inspect_engine(engine_bytes: bytes, name: str) -> dict[str, Any]:
+    """Deserialize one TRT engine and summarize its layer precisions."""
+    import tensorrt as trt
+
+    logger = trt.Logger(trt.Logger.ERROR)
+    runtime = trt.Runtime(logger)
+    engine = runtime.deserialize_cuda_engine(bytes(engine_bytes))
+    if engine is None:
+        return {"engine": name, "error": "failed to deserialize engine"}
+
+    inspector = engine.create_engine_inspector()
+    info = json.loads(inspector.get_engine_information(trt.LayerInformationFormat.JSON))
+    layers = info.get("Layers", [])
+
+    report: dict[str, Any] = {
+        "engine": name,
+        "serialized_bytes": len(engine_bytes),
+        "layer_count": len(layers),
+    }
+
+    if layers and isinstance(layers[0], dict):
+        precisions = Counter(_layer_precision(layer) for layer in layers)
+        report["precision_counts"] = dict(precisions.most_common())
+        report["int8_layer_count"] = sum(
+            count
+            for precision, count in precisions.items()
+            if "INT8" in precision.upper()
+        )
+        report["layers"] = [
+            {
+                "name": layer.get("Name", "?"),
+                "type": layer.get("LayerType", "?"),
+                "precision": _layer_precision(layer),
+            }
+            for layer in layers
+        ]
+    else:
+        # Engine built without DETAILED profiling verbosity: names only.
+        report["precision_counts"] = None
+        report["note"] = (
+            "Engine carries layer names only. Rebuild with "
+            "'script/benchmark --detailed-build --force-rebuild' to record "
+            "per-layer precision."
+        )
+    return report
+
+
+def _print_report(report: dict[str, Any], list_layers: bool) -> None:
+    """Print one engine's precision summary to stdout."""
+    print(f"\n== {report['engine']} ==")
+    if "error" in report:
+        print(f"  ERROR: {report['error']}")
+        return
+    print(f"  serialized size: {report['serialized_bytes'] / 2**20:.1f} MiB")
+    print(f"  layers: {report['layer_count']}")
+    if report.get("precision_counts"):
+        print(f"  INT8 layers: {report['int8_layer_count']}")
+        for precision, count in report["precision_counts"].items():
+            print(f"    {precision}: {count}")
+        if list_layers:
+            for layer in report["layers"]:
+                print(
+                    f"    [{layer['precision']:>8}] {layer['type']:<20} {layer['name']}"
+                )
+    else:
+        print(f"  {report['note']}")
+
+
+def main() -> None:
+    """Locate the cached engine file and report each engine's precisions."""
+    args = _parse_args()
+
+    import torch
+
+    from whisper_trt.cache import get_cache_dir, set_cache_dir
+    from whisper_trt.model import get_model_filename
+
+    if args.data_dir:
+        set_cache_dir(args.data_dir)
+
+    engine_path = Path(get_cache_dir()) / get_model_filename(
+        args.model, args.compute_type
+    )
+    if not engine_path.exists():
+        raise SystemExit(
+            f"No cached engine at {engine_path}. Build it first "
+            "(run the server or script/benchmark)."
+        )
+
+    checkpoint = torch.load(engine_path, map_location="cpu")
+    targets = []
+    if args.engine in ("encoder", "both"):
+        targets.append(("encoder", checkpoint["audio_encoder_engine"]["engine"]))
+    if args.engine in ("decoder", "both"):
+        targets.append(("decoder", checkpoint["text_decoder_engine"]["engine"]))
+
+    print(f"Engine file: {engine_path} ({engine_path.stat().st_size / 2**20:.1f} MiB)")
+    reports = [_inspect_engine(blob, name) for name, blob in targets]
+    for report in reports:
+        _print_report(report, args.list_layers)
+
+    if args.json:
+        Path(args.json).write_text(json.dumps(reports, indent=2), encoding="utf-8")
+        print(f"\nWrote {args.json}")
+
+
+if __name__ == "__main__":
+    main()
