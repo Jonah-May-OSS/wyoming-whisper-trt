@@ -121,6 +121,11 @@ def main() -> None:
         pairs = [pairs[int(i * stride)] for i in range(args.max_utterances)]
 
     output.mkdir(parents=True, exist_ok=True)
+    # Clean up stale evaluation artifacts from previous runs
+    for old_file in output.glob("*.flac"):
+        old_file.unlink()
+    for old_file in output.glob("*.txt"):
+        old_file.unlink()
     for flac, text in pairs:
         shutil.copy2(flac, output / flac.name)
         (output / flac.name).with_suffix(".txt").write_text(

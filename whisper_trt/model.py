@@ -891,6 +891,11 @@ class WhisperTRTBuilder:
         full-recompute engine. The runtime decoder is reconstructed from
         whichever keys are present (the checkpoint records the mode).
         """
+        if cls.decoder_mode not in _ENGINE_SCHEMA:
+            raise RuntimeError(
+                f"Unknown decoder_mode '{cls.decoder_mode}'. "
+                f"Valid options: {list(_ENGINE_SCHEMA.keys())}"
+            )
         if cls.decoder_mode == "simple":
             return {"text_decoder_engine": cls.build_text_decoder_engine().state_dict()}
         return {
@@ -1131,14 +1136,17 @@ _ENGINE_SCHEMA = {"kv": "kv4", "simple": "simple1"}
 
 
 def get_model_filename(
-    name: str, quant_mode: str, decoder_mode: str | None = None
+    name: str,
+    quant_mode: str,
+    decoder_mode: str | None = None,
+    max_workspace_mb: int | None = None,
 ) -> str:
     """
     Returns the compute-type- and decoder-mode-aware cached engine filename.
 
-    Each distinct compute type (float32, float16, int8) and decoder mode (kv,
-    simple) produces a separate cached engine file, preventing silent reuse of
-    an engine built under a different precision or decoder layout. The
+    Each distinct compute type (float32, float16, int8), decoder mode (kv,
+    simple), and workspace budget produces a separate cached engine file,
+    preventing silent reuse of an engine built under different settings. The
     engine-schema tag additionally invalidates caches whose serialized layout
     no longer matches the loader.
 
@@ -1147,21 +1155,33 @@ def get_model_filename(
         quant_mode (str): The quantization mode ("float32", "float16", or "int8").
         decoder_mode (str | None): "kv" or "simple"; defaults to the builder's
             current ``decoder_mode``.
+        max_workspace_mb (int | None): Per-engine TensorRT workspace budget in MiB;
+            defaults to the builder's current ``max_workspace_size`` converted to MiB.
 
     Returns:
-        str: Filename with the quant mode and schema embedded
-            (e.g. "tiny_trt_float16_kv4.pth").
+        str: Filename with the quant mode, schema, and workspace embedded
+            (e.g. "tiny_trt_float16_kv4_ws1024.pth").
 
     Raises:
-        RuntimeError: If ``name`` is not a recognised model name.
+        RuntimeError: If ``name`` is not a recognised model name or if
+            ``decoder_mode`` is not a valid decoder mode.
     """
     if name not in MODEL_FILENAMES:
         raise RuntimeError(f"Model '{name}' is not supported by WhisperTRT.")
     mode = decoder_mode or WhisperTRTBuilder.decoder_mode
-    schema = _ENGINE_SCHEMA.get(mode, _ENGINE_SCHEMA["kv"])
+    if mode not in _ENGINE_SCHEMA:
+        raise RuntimeError(
+            f"Unknown decoder_mode '{mode}'. Valid options: {list(_ENGINE_SCHEMA.keys())}"
+        )
+    schema = _ENGINE_SCHEMA[mode]
+    workspace_mb = (
+        max_workspace_mb
+        if max_workspace_mb is not None
+        else (WhisperTRTBuilder.max_workspace_size >> 20)
+    )
     base = MODEL_FILENAMES[name]
     stem, ext = os.path.splitext(base)
-    return f"{stem}_{quant_mode}_{schema}{ext}"
+    return f"{stem}_{quant_mode}_{schema}_ws{workspace_mb}{ext}"
 
 
 def load_trt_model(
@@ -1182,11 +1202,15 @@ def load_trt_model(
 
     if name not in MODEL_BUILDERS:
         raise RuntimeError(f"Model '{name}' is not supported by WhisperTRT.")
-    # determine on-disk path — include quant_mode in filename to avoid silent
-    # reuse of an engine built under a different precision.
+    # determine on-disk path — include quant_mode and workspace in filename to avoid
+    # silent reuse of an engine built under different settings.
 
     if path is None:
-        filename = get_model_filename(name, WhisperTRTBuilder.get_compute_type())
+        filename = get_model_filename(
+            name,
+            WhisperTRTBuilder.get_compute_type(),
+            max_workspace_mb=WhisperTRTBuilder.max_workspace_size >> 20,
+        )
         path = os.path.join(get_cache_dir(), filename)
         make_cache_dir()
 

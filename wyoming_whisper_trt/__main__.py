@@ -305,8 +305,8 @@ def _parse_args() -> argparse.Namespace:
             "Per-engine TensorRT build-time scratch budget in MiB. This bounds "
             "the workspace tactic search may use; it does not control runtime "
             "VRAM (use --decoder-mode for that). Keep it generous; raise it "
-            "only if a large model fails to build. Changing it rebuilds the "
-            "engine cache."
+            "only if a large model fails to build. Engines are cached by "
+            "compute-type, decoder-mode, and workspace budget."
         ),
     )
     parser.add_argument(
@@ -348,6 +348,14 @@ def _parse_args() -> argparse.Namespace:
 async def main() -> None:
     """Main entry point."""
     args = _parse_args()
+
+    # Validate max-workspace-mb
+    if args.max_workspace_mb <= 0:
+        logger.error(
+            "Invalid --max-workspace-mb value: %d. Must be a positive integer.",
+            args.max_workspace_mb,
+        )
+        sys.exit(1)
 
     # Setup logging
     setup_logging(args.debug, args.log_format)
@@ -391,7 +399,11 @@ async def main() -> None:
         logger.info("Loading Whisper TRT model '%s'...", model_name)
         model_path = os.path.join(
             args.download_dir,
-            get_model_filename(model_name, WhisperTRTBuilder.get_compute_type()),
+            get_model_filename(
+                model_name,
+                WhisperTRTBuilder.get_compute_type(),
+                max_workspace_mb=args.max_workspace_mb,
+            ),
         )
         trt_model = load_trt_model(
             model_name,

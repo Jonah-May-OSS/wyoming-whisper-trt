@@ -14,6 +14,17 @@ def ensure_venv_python(script_path: str) -> None:
     The developer tools need torch/tensorrt from .venv, but are commonly
     invoked with the system interpreter (``./script/benchmark``). Mirrors
     what script/run does rather than failing with ModuleNotFoundError.
+
+    Args:
+        script_path: The path to the script being executed, used to construct
+            the re-exec command with the venv interpreter.
+
+    Returns:
+        None
+
+    Raises:
+        SystemExit: When running on Windows and re-execution is needed (raised
+            from subprocess.call to propagate the child's exit code).
     """
     subdir = "Scripts/python.exe" if os.name == "nt" else "bin/python"
     venv_python = PROGRAM_DIR / ".venv" / subdir

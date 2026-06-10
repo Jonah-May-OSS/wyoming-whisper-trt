@@ -93,9 +93,11 @@ def _parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help=(
-            "Per-engine TensorRT scratch limit in MiB (default: builder "
-            "default). Lower it to shrink engine VRAM; sweep it to find the "
-            "knee. Implies a rebuild — combine with --force-rebuild."
+            "Per-engine TensorRT build-time scratch budget in MiB (default: "
+            "builder default). This bounds the workspace tactic search may use; "
+            "it does not control runtime VRAM. Keep it generous; raise it only "
+            "if a large model fails to build. Engines are cached by compute-type, "
+            "decoder-mode, and workspace budget."
         ),
     )
     parser.add_argument("--json", default=None, help="Write results to a JSON file")
@@ -128,7 +130,7 @@ def _word_edit_distance(ref: list[str], hyp: list[str]) -> int:
     return prev[-1]
 
 
-def _make_normalizer(language: str):
+def _make_normalizer(language: str) -> "BasicTextNormalizer":
     from whisper.normalizers import BasicTextNormalizer, EnglishTextNormalizer
 
     if language in ("en", "auto"):
@@ -175,6 +177,11 @@ def _nvidia_smi_process_mib() -> float | None:
 
 def _load_eval_set(eval_dir: Path, limit: int) -> list[tuple[Path, str]]:
     """Return (audio_path, reference_text) pairs, sorted for determinism."""
+    if not eval_dir.exists() or not eval_dir.is_dir():
+        raise SystemExit(
+            f"Missing or invalid --eval-dir: {eval_dir}. "
+            "Provide a valid directory path."
+        )
     pairs: list[tuple[Path, str]] = []
     audio_files = sorted(
         p for p in eval_dir.iterdir() if p.suffix.lower() in (".wav", ".flac")
@@ -321,7 +328,10 @@ def _run_single(args: argparse.Namespace) -> dict[str, Any]:
     compute_type = args.compute_type[0]
     _apply_builder_config(args, compute_type)
 
-    engine_path = Path(get_cache_dir()) / get_model_filename(args.model, compute_type)
+    workspace_mb = args.max_workspace_mb if args.max_workspace_mb is not None else (WhisperTRTBuilder.max_workspace_size >> 20)
+    engine_path = Path(get_cache_dir()) / get_model_filename(
+        args.model, compute_type, max_workspace_mb=workspace_mb
+    )
     if args.force_rebuild and engine_path.exists():
         logger.info("Removing cached engine %s", engine_path)
         engine_path.unlink()

@@ -15,7 +15,9 @@ import socket
 import sys
 import wave
 from asyncio.subprocess import DEVNULL, PIPE, Process
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -89,7 +91,11 @@ async def _connect_when_ready(
             await asyncio.sleep(0.5)
 
 
-async def _next_event_of(reader: asyncio.StreamReader, is_type, timeout):
+async def _next_event_of(
+    reader: asyncio.StreamReader,
+    is_type: Callable[[Any], bool],
+    timeout: float | None,
+) -> Any:
     """Read events until one matches the given Wyoming type predicate."""
     while True:
         event = await asyncio.wait_for(async_read_event(reader), timeout=timeout)
