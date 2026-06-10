@@ -135,6 +135,7 @@ docker run \
   -e MODEL=base \                             # which model to load (tiny, small, base, etc.)
   -e LANGUAGE=auto \                          # default transcription language (`auto` = detect)
   -e COMPUTE_TYPE=float16 \                   # float16, float32, or int8 (int8 = experimental, encoder-only INT8 + FP16 decoder)
+  -e DECODER_MODE=kv \                        # kv (fast, ~1 GB VRAM) or simple (lean, ~200 MB less)
   -e DEVICE=cuda \                            # `cuda` or `cpu`
   captnspdr/wyoming-whisper-trt:latest
 ```
@@ -150,6 +151,7 @@ docker run \
   -e MODEL=base \                             # which model to load (tiny, small, base, etc.)
   -e LANGUAGE=auto \                          # default transcription language (`auto` = detect)
   -e COMPUTE_TYPE=float16 \                   # float16, float32, or int8 (int8 = experimental, encoder-only INT8 + FP16 decoder)
+  -e DECODER_MODE=kv \                        # kv (fast, ~1 GB VRAM) or simple (lean, ~200 MB less)
   -e DEVICE=cuda \                            # `cuda` or `cpu`
   captnspdr/wyoming-whisper-trt:latest-igpu
 ```
@@ -205,10 +207,17 @@ and the venv created by `script/setup`:
 # also works.
 ./script/prepare_eval_set --output ./eval
 
-# Compare compute types. Each runs in its own subprocess so VRAM numbers are
-# clean; engines are cached per compute type under --data-dir.
+# Compare compute types (default kv decoder). Each runs in its own subprocess
+# so VRAM numbers are clean; engines are cached per compute type + decoder
+# mode under --data-dir.
 ./script/benchmark --model base --compute-type float16 int8 \
     --eval-dir ./eval --data-dir ./local --json results.json
+
+# Compare decoder modes (see "Decoder modes" below).
+./script/benchmark --model base --compute-type float16 --decoder-mode kv \
+    --eval-dir ./eval --data-dir ./local --json kv.json
+./script/benchmark --model base --compute-type float16 --decoder-mode simple \
+    --eval-dir ./eval --data-dir ./local --json simple.json
 
 # Check which layers actually run INT8. Per-layer precision is only recorded
 # when the engine was built with --detailed-build.
@@ -220,26 +229,55 @@ and the venv created by `script/setup`:
 # so they work with the system python on the shebang line.
 ```
 
+#### Decoder modes (`--decoder-mode`, env `DECODER_MODE`)
+
+Decoding is autoregressive — the text decoder runs once per output token —
+so its implementation drives latency. Two are available:
+
+- **`kv`** (default): caches self-attention key/values across steps and
+  projects cross-attention K/V once per utterance, across three TensorRT
+  engines. Fastest.
+- **`simple`**: a single engine that recomputes the whole token prefix each
+  step. One engine context instead of three, so it uses less VRAM.
+
+Measured on `base`, 300 utterances, float16 (RTX 3050, TensorRT 10):
+
+| | `kv` (default) | `simple` |
+|---|---|---|
+| WER | 5.37 % | 5.36 % |
+| Latency p95 | 0.124 s | 0.144 s |
+| Latency mean | 0.058 s | 0.068 s |
+| Realtime factor | 128× | 110× |
+| VRAM (nvidia-smi) | 1032 MiB | 834 MiB |
+| Decoder engine(s) | 95.9 MiB (3) | 51.0 MiB (1) |
+
+`kv` is ~14 % faster; `simple` uses ~200 MiB less VRAM. Both run well over
+100× realtime, so on tight-VRAM devices (e.g. Jetson) `simple` is a
+reasonable trade. Note most of WhisperTRT's decode speedup comes from
+optimizations that apply to *both* modes (final-position projection,
+GPU-side mel, fewer host syncs); the KV cache itself is the last ~14 %.
+
 #### A note on `int8`
 
 `COMPUTE_TYPE=int8` requests TensorRT *implicit* INT8 quantization for the
 encoder (the decoder always stays FP16). Implicit quantization is per-layer
 optional — TensorRT only uses INT8 where it times faster than FP16 — and it
-is deprecated in TensorRT 10. Measured with the tools above:
+is deprecated in TensorRT 10. Measured with the tools above (default `kv`
+decoder):
 
-| `base`, 300 utterances (RTX 3050, TensorRT 10.16) | float16 | int8 |
+| `base`, 300 utterances (RTX 3050, TensorRT 10) | float16 | int8 |
 |---|---|---|
-| WER | 5.36 % | 5.36 % |
-| Latency p95 | 0.258 s | 0.255 s |
-| VRAM (nvidia-smi) | 432 MiB | 438 MiB |
-| Encoder engine size | 40.1 MiB | 40.2 MiB |
+| WER | 5.37 % | 5.37 % |
+| Latency p95 | 0.124 s | 0.124 s |
+| VRAM (nvidia-smi) | 1032 MiB | 1032 MiB |
+| Encoder engine size | 40.0 MiB | 40.2 MiB |
 | INT8 layers in engine | — | 0 of 105 |
-| Engine build time | 98 s | 159 s |
 
 In other words: on this hardware the int8 engine is identical to float16 and
-just takes longer to build. Other GPU/TensorRT combinations may behave
-differently — run `script/layer_report` on your own hardware before assuming
-any benefit. Guaranteed quantization would require explicit Q/DQ (e.g. via
+just takes longer to build (WER differences are within run-to-run noise).
+Other GPU/TensorRT combinations may behave differently — run
+`script/layer_report` on your own hardware before assuming any benefit.
+Guaranteed quantization would require explicit Q/DQ (e.g. via
 nvidia-modelopt), which only pays off on `medium`/`large` encoders.
 
 ### Testing and Linting Tools
