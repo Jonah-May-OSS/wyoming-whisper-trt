@@ -42,6 +42,13 @@ from whisper.tokenizer import TO_LANGUAGE_CODE, Tokenizer
 import torch2trt
 
 from .__version__ import __version__
+from ._decoder import (
+    CachedDecoderStep,
+    CrossKVProjector,
+    DecodeRequest,
+    TextDecoderState,
+    TextDecoderTRTKV,
+)
 from .cache import get_cache_dir, make_cache_dir
 
 logger = logging.getLogger(__name__)
@@ -167,33 +174,11 @@ def _encoder_int8_calib_dataset(
 
 
 @dataclass
-class TextDecoderState:
-    """State needed by TextDecoderTRT on top of the TensorRT engine."""
-
-    token_embedding: nn.Embedding
-    positional_embedding: torch.Tensor
-    ln: LayerNorm
-    mask: torch.Tensor
-
-
-@dataclass
 class WhisperTRTConfig:
     """Optional runtime configuration for the WhisperTRT model."""
 
     tokenizer: Tokenizer | None = None
     verbose: bool = False
-
-
-@dataclass
-class DecodeRequest:
-    """Inputs required for one autoregressive decode pass."""
-
-    out_tokens: torch.Tensor
-    cur_len: int
-    prompt_len: int
-    max_len: int
-    audio_features: Tensor
-    stream: bool
 
 
 class _AudioEncoderEngine(nn.Module):
@@ -246,59 +231,6 @@ class AudioEncoderTRT(nn.Module):
         return "TensorRT audio encoder wrapper"
 
 
-class _TextDecoderEngine(nn.Module):
-    """Torch module form of the Whisper decoder blocks for TRT conversion."""
-
-    def __init__(self, blocks: Any) -> None:
-        super().__init__()
-        self.blocks = blocks
-
-    @torch.no_grad()
-    def forward(self, x: Tensor, xa: Tensor, mask: Tensor) -> Tensor:
-        """Run decoder blocks for token features before output projection."""
-        for block in cast(list[Any], self.blocks):
-            x = block(x, xa, mask)
-        return x
-
-    def summary(self) -> str:
-        """Return a short human-readable component summary."""
-        return "Text decoder conversion module"
-
-
-class TextDecoderTRT(nn.Module):
-    """Whisper text decoder that runs through a TensorRT engine."""
-
-    def __init__(self, engine: Any, state: TextDecoderState) -> None:
-        super().__init__()
-        self.engine = engine
-        self.token_embedding = state.token_embedding
-        self.positional_embedding = state.positional_embedding
-        self.ln = state.ln
-        self.register_buffer("mask", state.mask, persistent=False)
-
-    @torch.no_grad()
-    def forward(self, x: Tensor, xa: Tensor) -> Tensor:
-        """Decode token ids into next-token logits.
-
-        Returns logits for the final position only: greedy decoding consumes
-        just the last token, so projecting the whole growing prefix through
-        the ~51 k-wide vocab matmul every step is wasted work. The self-
-        attention inside ``self.engine`` still sees the full prefix (there is
-        no KV cache); only the output projection is sliced.
-        """
-        token_emb = self.token_embedding(x).to(xa.device)
-        pos_emb = self.positional_embedding[: x.shape[-1]].to(xa.device)
-        hidden = token_emb + pos_emb
-        hidden = self.engine(hidden, xa, self.mask.to(xa.device))
-        hidden = self.ln(hidden)[:, -1:, :]
-        weight = self.token_embedding.weight.to(hidden.device)
-        return (hidden @ torch.transpose(weight, 0, 1)).float()
-
-    def summary(self) -> str:
-        """Return a short human-readable component summary."""
-        return "TensorRT text decoder wrapper"
-
-
 class WhisperTRT(nn.Module):
     """Whisper model optimized for TensorRT inference."""
 
@@ -306,7 +238,7 @@ class WhisperTRT(nn.Module):
         self,
         dims: ModelDimensions,
         encoder: AudioEncoderTRT,
-        decoder: TextDecoderTRT,
+        decoder: TextDecoderTRTKV,
         config: WhisperTRTConfig | None = None,
     ) -> None:
         super().__init__()
@@ -322,13 +254,9 @@ class WhisperTRT(nn.Module):
         """Embed mel spectrogram features with the TRT encoder."""
         return self.encoder(mel)
 
-    def logits(self, tokens: torch.Tensor, audio_features: Tensor) -> Tensor:
-        """Return logits for token ids conditioned on audio features."""
-        return self.decoder(tokens, audio_features)
-
-    def forward(self, mel: Tensor, tokens: torch.Tensor) -> Tensor:
-        """Run end-to-end forward pass from mel input to logits."""
-        return self.decoder(tokens, self.encoder(mel))
+    def forward(self, *args: Any, **kwargs: Any) -> Any:
+        """Unused. Use transcribe() (or embed_audio()) instead."""
+        raise NotImplementedError("WhisperTRT has no forward(); use transcribe().")
 
     def _normalize_audio_input(self, audio: str | np.ndarray) -> np.ndarray:
         """Load path-like audio input or normalize ndarray audio input."""
@@ -412,24 +340,41 @@ class WhisperTRT(nn.Module):
 
         return out_tokens, cur_len, cur_len
 
+    def _prime_cache(self, request: DecodeRequest) -> tuple[Tensor, Tensor, Tensor]:
+        """Replay the prompt to build the KV cache and precompute cross K/V.
+
+        Returns the logits that predict the first generated token, the primed
+        self-attention cache, and the (static) cross-attention cache.
+        """
+        decoder = self.decoder
+        cross_kv = decoder.compute_cross_kv(request.audio_features)
+        self_kv = decoder.empty_self_cache(request.audio_features.device)
+        logits: Tensor | None = None
+        for pos in range(request.prompt_len):
+            token_id = int(request.out_tokens[0, pos].item())
+            logits, self_kv = decoder.step(token_id, pos, self_kv, cross_kv)
+        assert logits is not None  # prompt_len >= 1 (always seeded with sot)
+        return logits, self_kv, cross_kv
+
     def _decode_sequence(
         self,
         tokenizer: Tokenizer,
         request: DecodeRequest,
     ) -> tuple[str, list[str], float]:
-        """Autoregressively decode tokens and return final text and interim chunks."""
+        """Autoregressively decode with a self-attention KV cache.
+
+        The prompt is replayed one token at a time to prime the cache, after
+        which each generated token is fed back as a single-token step. The
+        decoder reuses the precomputed cross-attention K/V throughout, so no
+        prefix or encoder projection is recomputed per token.
+        """
         chunks: list[str] = []
         decode_start = time.perf_counter()
+        logits, self_kv, cross_kv = self._prime_cache(request)
 
         last_token_id = -1
-        for _ in range(request.cur_len, request.max_len):
-            token_logits = self.logits(
-                request.out_tokens[:, : request.cur_len],
-                request.audio_features,
-            )
-            # One GPU->CPU sync per token; reuse the int for the buffer write
-            # and the stop check rather than reading the tensor back twice.
-            last_token_id = int(token_logits.argmax(dim=-1)[0, -1].item())
+        while request.cur_len < request.max_len:
+            last_token_id = int(logits.argmax(dim=-1)[0, -1].item())
             request.out_tokens[0, request.cur_len] = last_token_id
             request.cur_len += 1
 
@@ -437,17 +382,23 @@ class WhisperTRT(nn.Module):
                 interim = request.out_tokens[:, request.prompt_len : request.cur_len]
                 chunks.append(self._decode_tokens(interim))
 
-            if last_token_id == tokenizer.eot:
+            if last_token_id == tokenizer.eot or request.cur_len >= request.max_len:
                 break
+
+            # Feed the just-generated token (at index cur_len - 1) to predict
+            # the next one.
+            logits, self_kv = self.decoder.step(
+                last_token_id, request.cur_len - 1, self_kv, cross_kv
+            )
 
         end_index = request.cur_len
         if last_token_id == tokenizer.eot:
             end_index = request.cur_len - 1
 
-        final_ids = request.out_tokens[:, request.prompt_len : end_index]
-        final_text = self._decode_tokens(final_ids)
-        decode_time = time.perf_counter() - decode_start
-        return final_text, chunks, decode_time
+        final_text = self._decode_tokens(
+            request.out_tokens[:, request.prompt_len : end_index]
+        )
+        return final_text, chunks, time.perf_counter() - decode_start
 
     def _audio_to_mel(self, audio_array: np.ndarray) -> tuple[Tensor, float]:
         """Convert normalized audio samples to a mel spectrogram tensor."""
@@ -593,53 +544,85 @@ class WhisperTRTBuilder:
         return cls._dims
 
     @classmethod
+    def _decoder_fp16(cls) -> bool:
+        """Whether decoder engines build in FP16.
+
+        The decoder always stays FP16 (even under int8): its inputs are
+        intermediate activations with no representative calibration set, and
+        it is latency-bound by the autoregressive loop, not FLOP-bound.
+        """
+        return cls.fp16_mode or cls.quant_mode == "int8"
+
+    @classmethod
     @torch.no_grad()
-    def build_text_decoder_engine(cls) -> Any:
-        """Build and return a TensorRT text decoder engine."""
+    def build_cross_kv_engine(cls) -> Any:
+        """Build the engine that projects encoder features to cross K/V once."""
         dims = cls._load_model_once()
         model_inst = load_model(cls.model).cuda().eval()
-        decoder_blocks_module = _TextDecoderEngine(model_inst.decoder.blocks)
-        x = torch.randn(1, 1, dims.n_text_state).cuda()
+        module = CrossKVProjector(model_inst.decoder.blocks)
         xa = torch.randn(1, dims.n_audio_ctx, dims.n_audio_state).cuda()
-        mask = torch.randn(dims.n_text_ctx, dims.n_text_ctx).cuda()
-        # The decoder stays in FP16 even when INT8 is requested (mixed precision).
-        # Its inputs are intermediate activations — decoder hidden states and the
-        # encoder's cross-attention features — that we have no representative
-        # calibration set for, so quantizing it would degrade accuracy for little
-        # gain (the decoder is latency-bound by its autoregressive loop, not
-        # FLOP-bound). INT8 is applied to the encoder only; see
-        # build_audio_encoder_engine.
-        decoder_fp16 = cls.fp16_mode or cls.quant_mode == "int8"
-        # Whisper's SDPA path computes is_causal as `mask is not None and
-        # n_ctx > 1`; under the ONNX trace n_ctx is symbolic, so that
-        # expression is a Tensor and SDPA rejects it (is_causal must be a
-        # bool). Convert via whisper's manual-attention path instead — it is
-        # mathematically identical and applies the mask explicitly.
+        # disable_sdpa is unnecessary here (no attention is computed) but keeps
+        # the trace on whisper's plain Linear projections.
         with disable_sdpa():
             return _torch2trt_convert(
-                decoder_blocks_module,
-                [x, xa, mask],
+                module,
+                [xa],
+                use_onnx=True,
+                int8_mode=False,
+                input_names=["xa"],
+                output_names=["cross_k", "cross_v"],
+                max_workspace_size=cls.max_workspace_size,
+                fp16_mode=cls._decoder_fp16(),
+                log_level=_trt_log_level(cls.verbose),
+            )
+
+    @classmethod
+    @torch.no_grad()
+    def build_decoder_step_engine(cls) -> Any:
+        """Build the single-token KV-cached decoder-step engine.
+
+        The self-attention cache length (axis 2 of ``self_k``/``self_v``) is
+        dynamic: it grows from 0 (empty, first prompt token) to ``n_text_ctx``.
+        """
+        dims = cls._load_model_once()
+        model_inst = load_model(cls.model).cuda().eval()
+        module = CachedDecoderStep(model_inst.decoder.blocks, dims.n_text_head)
+
+        n_layers = dims.n_text_layer
+        n_state = dims.n_text_state
+        n_audio_ctx = dims.n_audio_ctx
+        n_text_ctx = dims.n_text_ctx
+        opt_past = max(1, n_text_ctx // 16)
+
+        x = torch.randn(1, 1, n_state).cuda()
+        self_kv = torch.randn(2, n_layers, 1, opt_past, n_state).cuda()
+        cross_kv = torch.randn(2, n_layers, 1, n_audio_ctx, n_state).cuda()
+
+        with disable_sdpa():
+            return _torch2trt_convert(
+                module,
+                [x, self_kv, cross_kv],
                 use_onnx=True,
                 int8_mode=False,
                 min_shapes=[
-                    (1, 1, dims.n_text_state),
-                    (1, 1, dims.n_audio_state),
-                    (dims.n_text_ctx, dims.n_text_ctx),
+                    (1, 1, n_state),
+                    (2, n_layers, 1, 0, n_state),
+                    (2, n_layers, 1, n_audio_ctx, n_state),
                 ],
                 opt_shapes=[
-                    (1, 1, dims.n_text_state),
-                    (1, dims.n_audio_ctx, dims.n_audio_state),
-                    (dims.n_text_ctx, dims.n_text_ctx),
+                    (1, 1, n_state),
+                    (2, n_layers, 1, opt_past, n_state),
+                    (2, n_layers, 1, n_audio_ctx, n_state),
                 ],
                 max_shapes=[
-                    (1, dims.n_text_ctx, dims.n_text_state),
-                    (1, dims.n_audio_ctx, dims.n_audio_state),
-                    (dims.n_text_ctx, dims.n_text_ctx),
+                    (1, 1, n_state),
+                    (2, n_layers, 1, n_text_ctx, n_state),
+                    (2, n_layers, 1, n_audio_ctx, n_state),
                 ],
-                input_names=["x", "xa", "mask"],
-                output_names=["output"],
+                input_names=["x", "self_kv", "cross_kv"],
+                output_names=["hidden", "new_self_kv"],
                 max_workspace_size=cls.max_workspace_size,
-                fp16_mode=decoder_fp16,
+                fp16_mode=cls._decoder_fp16(),
                 log_level=_trt_log_level(cls.verbose),
             )
 
@@ -736,7 +719,8 @@ class WhisperTRTBuilder:
         checkpoint = {
             "whisper_trt_version": __version__,
             "dims": asdict(load_model(cls.model).dims),
-            "text_decoder_engine": cls.build_text_decoder_engine().state_dict(),
+            "cross_kv_engine": cls.build_cross_kv_engine().state_dict(),
+            "decoder_step_engine": cls.build_decoder_step_engine().state_dict(),
             "text_decoder_extra_state": cls.get_text_decoder_extra_state(),
             "audio_encoder_engine": cls.build_audio_encoder_engine().state_dict(),
             "audio_encoder_extra_state": cls.get_audio_encoder_extra_state(),
@@ -775,10 +759,12 @@ class WhisperTRTBuilder:
         cls,
         checkpoint: dict[str, Any],
         dims: ModelDimensions,
-    ) -> TextDecoderTRT:
-        """Construct TextDecoderTRT from a serialized checkpoint."""
-        text_decoder_engine = _new_trt_module().cuda()
-        text_decoder_engine.load_state_dict(checkpoint["text_decoder_engine"])
+    ) -> TextDecoderTRTKV:
+        """Construct the KV-cached text decoder from a serialized checkpoint."""
+        cross_kv_engine = _new_trt_module().cuda()
+        cross_kv_engine.load_state_dict(checkpoint["cross_kv_engine"])
+        step_engine = _new_trt_module().cuda()
+        step_engine.load_state_dict(checkpoint["decoder_step_engine"])
 
         text_state = checkpoint["text_decoder_extra_state"]
         token_embedding = nn.Embedding(dims.n_vocab, dims.n_text_state)
@@ -790,14 +776,16 @@ class WhisperTRTBuilder:
         if not mask.is_cuda:
             mask = mask.cuda()
 
-        return TextDecoderTRT(
-            text_decoder_engine,
+        return TextDecoderTRTKV(
+            cross_kv_engine,
+            step_engine,
             TextDecoderState(
                 token_embedding=token_embedding,
                 positional_embedding=positional_embedding,
                 ln=ln_layer,
                 mask=mask,
             ),
+            dims,
         )
 
     @classmethod
@@ -927,19 +915,29 @@ MODEL_BUILDERS = {
 }
 
 
+# Bump when the on-disk engine layout changes so stale checkpoints are
+# rebuilt rather than mis-loaded. "kv2" = the two-engine KV-cached decoder
+# (cross_kv_engine + decoder_step_engine). Pre-KV engines used no schema tag,
+# so their files remain on disk untouched and a code revert reuses them.
+_ENGINE_SCHEMA = "kv2"
+
+
 def get_model_filename(name: str, quant_mode: str) -> str:
     """
     Returns the compute-type-aware filename for a given model and quantization mode.
 
     Each distinct compute type (float32, float16, int8) produces a separate cached
     engine file, preventing silent reuse of an engine built under a different precision.
+    The engine-schema tag additionally invalidates caches whose serialized layout
+    no longer matches the loader.
 
     Args:
         name (str): The model name (e.g. "tiny", "base.en").
         quant_mode (str): The quantization mode ("float32", "float16", or "int8").
 
     Returns:
-        str: Filename with the quant mode embedded (e.g. "tiny_trt_float16.pth").
+        str: Filename with the quant mode and schema embedded
+            (e.g. "tiny_trt_float16_kv2.pth").
 
     Raises:
         RuntimeError: If ``name`` is not a recognised model name.
@@ -948,7 +946,7 @@ def get_model_filename(name: str, quant_mode: str) -> str:
         raise RuntimeError(f"Model '{name}' is not supported by WhisperTRT.")
     base = MODEL_FILENAMES[name]
     stem, ext = os.path.splitext(base)
-    return f"{stem}_{quant_mode}{ext}"
+    return f"{stem}_{quant_mode}_{_ENGINE_SCHEMA}{ext}"
 
 
 def load_trt_model(
