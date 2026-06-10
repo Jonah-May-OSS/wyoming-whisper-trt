@@ -15,17 +15,13 @@ from asyncio.subprocess import PIPE
 from pathlib import Path
 
 import pytest
+import torch
 from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioStart, AudioStop, wav_to_chunks
 from wyoming.event import async_read_event, async_write_event
 from wyoming.info import Describe, Info
 
-try:
-    import torch
-
-    _CUDA_AVAILABLE = torch.cuda.is_available()
-except ImportError:  # pragma: no cover - torch is a hard requirement on GPU
-    _CUDA_AVAILABLE = False
+_CUDA_AVAILABLE = torch.cuda.is_available()
 
 _DIR = Path(__file__).parent
 _PROGRAM_DIR = _DIR.parent
