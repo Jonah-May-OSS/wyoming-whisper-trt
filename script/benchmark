@@ -299,6 +299,13 @@ def _run_single(args: argparse.Namespace) -> dict[str, Any]:
 
     # Build (timed only when the engine is not cached)
     was_cached = engine_path.exists()
+    if not was_cached:
+        logger.info(
+            "Building %s engine for '%s' — TensorRT tactic search takes "
+            "several minutes and prints nothing; int8 adds a calibration pass",
+            compute_type,
+            args.model,
+        )
     start = time.perf_counter()
     model = load_trt_model(args.model, language=args.language)
     build_seconds = None if was_cached else time.perf_counter() - start
@@ -359,19 +366,25 @@ def _run_child(args: argparse.Namespace, compute_type: str) -> dict[str, Any] | 
         cmd.append("--detailed-build")
 
     logger.info("=== %s: launching subprocess ===", compute_type)
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    sys.stderr.write(proc.stderr)
+    # Stream child output live (engine builds take minutes); the result line
+    # is intercepted by its marker prefix.
     result = None
-    for line in proc.stdout.splitlines():
-        if line.startswith(_RESULT_MARKER):
-            result = json.loads(line[len(_RESULT_MARKER) :])
-        else:
-            print(line)
-    if proc.returncode != 0 or result is None:
+    with subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+    ) as proc:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            if line.startswith(_RESULT_MARKER):
+                result = json.loads(line[len(_RESULT_MARKER) :])
+            else:
+                print(line, flush=True)
+        returncode = proc.wait()
+    if returncode != 0 or result is None:
         logger.error(
             "%s benchmark failed (exit %s); see output above",
             compute_type,
-            proc.returncode,
+            returncode,
         )
         return None
     return result
