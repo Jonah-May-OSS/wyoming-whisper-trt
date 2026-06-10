@@ -22,7 +22,12 @@ from whisper.model import disable_sdpa
 from wyoming.info import AsrModel, AsrProgram, Attribution, Info
 from wyoming.server import AsyncServer
 
-from whisper_trt import MODEL_FILENAMES, WhisperTRT, WhisperTRTBuilder, load_trt_model
+from whisper_trt import (
+    WhisperTRT,
+    WhisperTRTBuilder,
+    get_model_filename,
+    load_trt_model,
+)
 
 from . import __version__
 from .handler import HandlerContext, HandlerSettings, WhisperTrtEventHandler
@@ -214,6 +219,22 @@ async def run_server(
         logger.info("Server and event handlers stopped gracefully.")
 
 
+def _apply_compute_type(compute_type: str) -> None:
+    """Configure the builder for the requested compute type.
+
+    Warns when the experimental int8 path is selected (encoder INT8 +
+    FP16 decoder).
+    """
+    WhisperTRTBuilder.quant_mode = compute_type
+    WhisperTRTBuilder.fp16_mode = compute_type == "float16"
+    if compute_type == "int8":
+        logger.warning(
+            "int8 is experimental: the encoder is quantized to INT8 (calibrated "
+            "on a bundled speech clip) and the decoder runs FP16. Accuracy can "
+            "differ from float16; benefits are largest on medium/large models."
+        )
+
+
 async def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Whisper TRT ASR Server")
@@ -246,8 +267,12 @@ async def main() -> None:
     parser.add_argument(
         "--compute-type",
         default="float16",
-        choices=["float32", "float16"],
-        help="Compute type (float32, float16)",
+        choices=["float32", "float16", "int8"],
+        help=(
+            "Compute type (float32, float16, int8). int8 is experimental and "
+            "mixed-precision: the encoder runs INT8 (calibrated on a bundled "
+            "speech clip) and the decoder runs FP16."
+        ),
     )
     parser.add_argument(
         "--beam-size",
@@ -297,7 +322,7 @@ async def main() -> None:
     model_name = normalize_model_name(args.model)
 
     # Set compute-type
-    WhisperTRTBuilder.fp16_mode = args.compute_type == "float16"
+    _apply_compute_type(args.compute_type)
 
     # Set download directory to first data directory if not specified
     if not args.download_dir:
@@ -320,9 +345,12 @@ async def main() -> None:
     # Load Whisper TRT model
     try:
         logger.info("Loading Whisper TRT model '%s'...", model_name)
-        model_path = os.path.join(args.download_dir, MODEL_FILENAMES[model_name])
+        model_path = os.path.join(
+            args.download_dir,
+            get_model_filename(model_name, WhisperTRTBuilder.get_compute_type()),
+        )
         trt_model = load_trt_model(
-            args.model,
+            model_name,
             path=model_path,
             build=True,
             verbose=args.debug,

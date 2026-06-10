@@ -23,7 +23,13 @@
 
 from .__version__ import __version__
 from .cache import get_cache_dir, set_cache_dir
-from .model import MODEL_FILENAMES, WhisperTRT, WhisperTRTBuilder, load_trt_model
+from .model import (
+    MODEL_FILENAMES,
+    WhisperTRT,
+    WhisperTRTBuilder,
+    get_model_filename,
+    load_trt_model,
+)
 
 __all__ = [
     "MODEL_FILENAMES",
@@ -31,6 +37,7 @@ __all__ = [
     "WhisperTRTBuilder",
     "__version__",
     "get_cache_dir",
+    "get_model_filename",
     "load_trt_model",
     "set_cache_dir",
 ]

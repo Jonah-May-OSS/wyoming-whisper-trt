@@ -134,7 +134,7 @@ docker run \
   -p 10300:10300 \                            # map port 10300 → 10300
   -e MODEL=base \                             # which model to load (tiny, small, base, etc.)
   -e LANGUAGE=auto \                          # default transcription language (`auto` = detect)
-  -e COMPUTE_TYPE=float16 \                   # float16 or float32
+  -e COMPUTE_TYPE=float16 \                   # float16, float32, or int8 (int8 = experimental, encoder-only INT8 + FP16 decoder)
   -e DEVICE=cuda \                            # `cuda` or `cpu`
   captnspdr/wyoming-whisper-trt:latest
 ```
@@ -149,7 +149,7 @@ docker run \
   -p 10300:10300 \                            # map port 10300 → 10300
   -e MODEL=base \                             # which model to load (tiny, small, base, etc.)
   -e LANGUAGE=auto \                          # default transcription language (`auto` = detect)
-  -e COMPUTE_TYPE=float16 \                   # float16 or float32
+  -e COMPUTE_TYPE=float16 \                   # float16, float32, or int8 (int8 = experimental, encoder-only INT8 + FP16 decoder)
   -e DEVICE=cuda \                            # `cuda` or `cpu`
   captnspdr/wyoming-whisper-trt:latest-igpu
 ```
