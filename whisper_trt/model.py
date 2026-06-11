@@ -618,6 +618,25 @@ def auto_workspace_mb(model_name: str) -> int:
     This only chooses the *default*; an explicit ``--max-workspace-mb`` always
     takes precedence. The returned value is the build-time tactic-search
     ceiling, not a runtime allocation — see ``WhisperTRTBuilder``.
+
+    Args:
+        model_name: The Whisper model name (e.g., "tiny", "base", "small",
+            "medium", "large-v2"). Determines the base workspace target, with
+            larger models receiving more generous budgets.
+
+    Returns:
+        int: The build-time workspace ceiling in MiB. Returns the model-size
+            target when CUDA memory info is unavailable (no device or not
+            initialized); otherwise returns the minimum of the target and a
+            VRAM-based cap, but never less than ``_MIN_WORKSPACE_MB``.
+
+    Raises:
+        RuntimeError: If ``torch.cuda.mem_get_info()`` is called but CUDA
+            runtime encounters an error (caught and handled by falling back
+            to the unclamped target).
+        AssertionError: If ``torch.cuda.mem_get_info()`` is called but CUDA
+            is not properly initialized (caught and handled by falling back
+            to the unclamped target).
     """
     target = (
         _LARGE_WORKSPACE_MB if model_name in LARGE_MODELS else _DEFAULT_WORKSPACE_MB

@@ -13,7 +13,20 @@ TESTS_DIR = PROGRAM_DIR / "tests"
 
 
 def venv_python() -> str:
-    """Return the repo .venv interpreter path, ensuring its dirs exist."""
+    """Return the repository's .venv interpreter path.
+
+    Calls ``venv.EnvBuilder().ensure_directories(VENV_DIR)`` to create the
+    virtual environment directory structure if it doesn't already exist, then
+    returns the path to the interpreter executable.
+
+    Returns:
+        str: Path to the .venv Python interpreter executable. The directories
+            for the virtual environment are guaranteed to exist.
+
+    Raises:
+        OSError: If directory creation fails due to permission errors, disk
+            full, or other filesystem issues.
+    """
     return venv.EnvBuilder().ensure_directories(VENV_DIR).env_exe
 
 
