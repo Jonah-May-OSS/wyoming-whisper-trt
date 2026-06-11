@@ -26,6 +26,7 @@
 # It runs a little over the default line cap as a cohesive unit.
 # pylint: disable=too-many-lines
 
+import gc
 import importlib.resources
 import logging
 import os
@@ -108,6 +109,21 @@ def _trt_log_level(verbose: bool) -> int:
     if logger_cls is None:
         raise RuntimeError("tensorrt.Logger is unavailable")
     return logger_cls.VERBOSE if verbose else logger_cls.ERROR
+
+
+def _free_cached_vram() -> None:
+    """Return PyTorch's cached-but-unused GPU blocks to the CUDA driver.
+
+    TensorRT/Myelin allocates build-time scratch and constant regions straight
+    from the driver, not through PyTorch's caching allocator. Without this, the
+    weights a previous build step freed sit in torch's cache — reserved from the
+    driver but invisible to TensorRT — so a large engine's allocation can OOM
+    even though that memory is reusable. Called right before each convert; it
+    only releases unused blocks, so the live module and trace inputs are safe.
+    """
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 # Directory of bundled mono 16 kHz speech clips used to calibrate INT8
@@ -660,9 +676,14 @@ class WhisperTRTBuilder:
     @classmethod
     @torch.no_grad()
     def _load_model_once(cls) -> ModelDimensions:
-        """Load base Whisper model once per builder class and cache dimensions."""
+        """Cache the base Whisper model's dimensions (loaded on CPU).
+
+        Only ``.dims`` (plain metadata) is needed here, so the model is never
+        moved to the GPU — a ``.cuda()`` here would reserve a full model's worth
+        of VRAM in torch's cache just to read shapes, starving the build.
+        """
         if cls._dims is None:
-            cls._dims = load_model(cls.model).cuda().eval().dims
+            cls._dims = load_model(cls.model).dims
         return cls._dims
 
     @classmethod
@@ -685,6 +706,7 @@ class WhisperTRTBuilder:
         xa = torch.randn(1, dims.n_audio_ctx, dims.n_audio_state).cuda()
         # disable_sdpa is unnecessary here (no attention is computed) but keeps
         # the trace on whisper's plain Linear projections.
+        _free_cached_vram()
         with disable_sdpa():
             return _torch2trt_convert(
                 module,
@@ -720,6 +742,7 @@ class WhisperTRTBuilder:
         cross_kv = torch.randn(2, n_layers, 1, n_audio_ctx, n_state).cuda()
         mask = torch.zeros(opt_len, opt_len).cuda()
 
+        _free_cached_vram()
         with disable_sdpa():
             return _torch2trt_convert(
                 module,
@@ -772,6 +795,7 @@ class WhisperTRTBuilder:
         self_kv = torch.randn(2, n_layers, 1, opt_past, n_state).cuda()
         cross_kv = torch.randn(2, n_layers, 1, n_audio_ctx, n_state).cuda()
 
+        _free_cached_vram()
         with disable_sdpa():
             return _torch2trt_convert(
                 module,
@@ -821,6 +845,7 @@ class WhisperTRTBuilder:
         # expression is a Tensor and SDPA rejects it (is_causal must be a
         # bool). Convert via whisper's manual-attention path instead — it is
         # mathematically identical and applies the mask explicitly.
+        _free_cached_vram()
         with disable_sdpa():
             return _torch2trt_convert(
                 decoder_blocks_module,
@@ -889,6 +914,7 @@ class WhisperTRTBuilder:
         )
         # Trace through whisper's manual-attention path (not SDPA) for the
         # same reason as build_text_decoder_engine.
+        _free_cached_vram()
         with disable_sdpa():
             return _torch2trt_convert(
                 encoder_module,
@@ -919,7 +945,9 @@ class WhisperTRTBuilder:
     @torch.no_grad()
     def get_text_decoder_extra_state(cls) -> dict[str, Any]:
         """Return non-engine text-decoder state needed at runtime."""
-        model_inst = load_model(cls.model).cuda().eval()
+        # Stays on CPU: only params/buffers are read out for the checkpoint
+        # (re-homed to CUDA at load time), so a GPU copy here is wasted VRAM.
+        model_inst = load_model(cls.model)
         return {
             "token_embedding": model_inst.decoder.token_embedding.state_dict(),
             "positional_embedding": model_inst.decoder.positional_embedding,
@@ -931,7 +959,8 @@ class WhisperTRTBuilder:
     @torch.no_grad()
     def get_audio_encoder_extra_state(cls) -> dict[str, Any]:
         """Return non-engine audio-encoder state needed at runtime."""
-        model_inst = load_model(cls.model).cuda().eval()
+        # Stays on CPU for the same reason as get_text_decoder_extra_state.
+        model_inst = load_model(cls.model)
         return {"positional_embedding": model_inst.encoder.positional_embedding}
 
     @classmethod
