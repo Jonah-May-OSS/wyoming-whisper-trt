@@ -26,6 +26,8 @@
 # It runs a little over the default line cap as a cohesive unit.
 # pylint: disable=too-many-lines
 
+import ctypes
+import ctypes.util
 import gc
 import importlib.resources
 import logging
@@ -111,19 +113,48 @@ def _trt_log_level(verbose: bool) -> int:
     return logger_cls.VERBOSE if verbose else logger_cls.ERROR
 
 
-def _free_cached_vram() -> None:
-    """Return PyTorch's cached-but-unused GPU blocks to the CUDA driver.
+def _resolve_malloc_trim() -> Callable[[int], int] | None:
+    """Resolve glibc's ``malloc_trim`` once, or None when unavailable.
 
-    TensorRT/Myelin allocates build-time scratch and constant regions straight
-    from the driver, not through PyTorch's caching allocator. Without this, the
-    weights a previous build step freed sit in torch's cache — reserved from the
-    driver but invisible to TensorRT — so a large engine's allocation can OOM
-    even though that memory is reusable. Called right before each convert; it
-    only releases unused blocks, so the live module and trace inputs are safe.
+    Only present on Linux/glibc; returns None on musl, macOS, Windows, etc.
+    """
+    libc_name = ctypes.util.find_library("c") or "libc.so.6"
+    try:
+        libc = ctypes.CDLL(libc_name)
+        trim = libc.malloc_trim
+    except (OSError, AttributeError):
+        return None
+    trim.argtypes = [ctypes.c_size_t]
+    trim.restype = ctypes.c_int
+    return trim
+
+
+_MALLOC_TRIM = _resolve_malloc_trim()
+
+
+def _reclaim_memory() -> None:
+    """Release freed host and GPU memory back to the OS and the CUDA driver.
+
+    Each engine build allocates and frees GB-scale buffers in three places, so
+    reclamation has to hit all three or RSS climbs across engines until the host
+    OOMs (even though the memory is no longer live):
+
+    - ``gc.collect()`` drops Python objects (the TRT builder/network/parser and
+      the ONNX graph) so their memory is actually freed.
+    - ``torch.cuda.empty_cache()`` returns torch's cached GPU blocks to the
+      driver — TensorRT allocates straight from the driver and can't see them.
+    - ``malloc_trim`` returns glibc's freed-but-retained arenas to the OS;
+      without it ``free()`` keeps GB-scale build buffers in the arena and RSS
+      only grows. No-op off Linux/glibc.
+
+    Only already-free memory is released, so live modules and trace inputs are
+    safe. Called between build phases and before each convert.
     """
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+    if _MALLOC_TRIM is not None:
+        _MALLOC_TRIM(0)
 
 
 # Directory of bundled mono 16 kHz speech clips used to calibrate INT8
@@ -725,7 +756,7 @@ class WhisperTRTBuilder:
         xa = torch.randn(1, dims.n_audio_ctx, dims.n_audio_state).cuda()
         # disable_sdpa is unnecessary here (no attention is computed) but keeps
         # the trace on whisper's plain Linear projections.
-        _free_cached_vram()
+        _reclaim_memory()
         with disable_sdpa():
             return _torch2trt_convert(
                 module,
@@ -761,7 +792,7 @@ class WhisperTRTBuilder:
         cross_kv = torch.randn(2, n_layers, 1, n_audio_ctx, n_state).cuda()
         mask = torch.zeros(opt_len, opt_len).cuda()
 
-        _free_cached_vram()
+        _reclaim_memory()
         with disable_sdpa():
             return _torch2trt_convert(
                 module,
@@ -814,7 +845,7 @@ class WhisperTRTBuilder:
         self_kv = torch.randn(2, n_layers, 1, opt_past, n_state).cuda()
         cross_kv = torch.randn(2, n_layers, 1, n_audio_ctx, n_state).cuda()
 
-        _free_cached_vram()
+        _reclaim_memory()
         with disable_sdpa():
             return _torch2trt_convert(
                 module,
@@ -864,7 +895,7 @@ class WhisperTRTBuilder:
         # expression is a Tensor and SDPA rejects it (is_causal must be a
         # bool). Convert via whisper's manual-attention path instead — it is
         # mathematically identical and applies the mask explicitly.
-        _free_cached_vram()
+        _reclaim_memory()
         with disable_sdpa():
             return _torch2trt_convert(
                 decoder_blocks_module,
@@ -933,7 +964,7 @@ class WhisperTRTBuilder:
         )
         # Trace through whisper's manual-attention path (not SDPA) for the
         # same reason as build_text_decoder_engine.
-        _free_cached_vram()
+        _reclaim_memory()
         with disable_sdpa():
             return _torch2trt_convert(
                 encoder_module,
@@ -1007,18 +1038,18 @@ class WhisperTRTBuilder:
             engines = {
                 "text_decoder_engine": cls.build_text_decoder_engine().state_dict()
             }
-            _free_cached_vram()
+            _reclaim_memory()
             return engines
         # Build sequentially, reclaiming each engine's host-side build buffers
         # (ONNX protobuf, TRT parser/builder) before the next load_model, so a
         # finished engine's memory doesn't overlap the next engine's
         # model-sized load transient and inflate the peak.
         engines = {"cross_kv_engine": cls.build_cross_kv_engine().state_dict()}
-        _free_cached_vram()
+        _reclaim_memory()
         engines["prefill_engine"] = cls.build_prefill_engine().state_dict()
-        _free_cached_vram()
+        _reclaim_memory()
         engines["decoder_step_engine"] = cls.build_decoder_step_engine().state_dict()
-        _free_cached_vram()
+        _reclaim_memory()
         return engines
 
     @classmethod
@@ -1044,12 +1075,12 @@ class WhisperTRTBuilder:
             "audio_encoder_extra_state": cls.get_audio_encoder_extra_state(base),
         }
         del base
-        _free_cached_vram()
+        _reclaim_memory()
         checkpoint.update(cls._build_decoder_engines())
         checkpoint["audio_encoder_engine"] = (
             cls.build_audio_encoder_engine().state_dict()
         )
-        _free_cached_vram()
+        _reclaim_memory()
         torch.save(checkpoint, output_path)
 
     @classmethod
