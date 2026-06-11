@@ -26,6 +26,9 @@
 # It runs a little over the default line cap as a cohesive unit.
 # pylint: disable=too-many-lines
 
+import ctypes
+import ctypes.util
+import gc
 import importlib.resources
 import logging
 import os
@@ -108,6 +111,50 @@ def _trt_log_level(verbose: bool) -> int:
     if logger_cls is None:
         raise RuntimeError("tensorrt.Logger is unavailable")
     return logger_cls.VERBOSE if verbose else logger_cls.ERROR
+
+
+def _resolve_malloc_trim() -> Callable[[int], int] | None:
+    """Resolve glibc's ``malloc_trim`` once, or None when unavailable.
+
+    Only present on Linux/glibc; returns None on musl, macOS, Windows, etc.
+    """
+    libc_name = ctypes.util.find_library("c") or "libc.so.6"
+    try:
+        libc = ctypes.CDLL(libc_name)
+        trim = libc.malloc_trim
+    except (OSError, AttributeError):
+        return None
+    trim.argtypes = [ctypes.c_size_t]
+    trim.restype = ctypes.c_int
+    return trim
+
+
+_MALLOC_TRIM = _resolve_malloc_trim()
+
+
+def _reclaim_memory() -> None:
+    """Release freed host and GPU memory back to the OS and the CUDA driver.
+
+    Each engine build allocates and frees GB-scale buffers in three places, so
+    reclamation has to hit all three or RSS climbs across engines until the host
+    OOMs (even though the memory is no longer live):
+
+    - ``gc.collect()`` drops Python objects (the TRT builder/network/parser and
+      the ONNX graph) so their memory is actually freed.
+    - ``torch.cuda.empty_cache()`` returns torch's cached GPU blocks to the
+      driver — TensorRT allocates straight from the driver and can't see them.
+    - ``malloc_trim`` returns glibc's freed-but-retained arenas to the OS;
+      without it ``free()`` keeps GB-scale build buffers in the arena and RSS
+      only grows. No-op off Linux/glibc.
+
+    Only already-free memory is released, so live modules and trace inputs are
+    safe. Called between build phases and before each convert.
+    """
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    if _MALLOC_TRIM is not None:
+        _MALLOC_TRIM(0)
 
 
 # Directory of bundled mono 16 kHz speech clips used to calibrate INT8
@@ -564,6 +611,77 @@ class WhisperTRT(nn.Module):
         )
 
 
+# Whisper variants whose encoder/decoder are large enough that the default
+# 1 GiB tactic-search budget is too tight: they build better (and avoid the
+# occasional build failure) with a more generous workspace. Used by
+# ``auto_workspace_mb`` to pick a default build-time scratch budget.
+LARGE_MODELS = frozenset({"large", "large-v2", "large-v3", "large-v3-turbo"})
+
+# Per-engine workspace targets in MiB, before clamping to free VRAM.
+_LARGE_WORKSPACE_MB = 4096
+_DEFAULT_WORKSPACE_MB = 1024
+# The workspace is reserved *concurrently* with the rest of the build, so the
+# cap is taken over the VRAM left after setting aside a reserve for everything
+# else the build holds at the same time: the resident Whisper weights plus
+# TensorRT's constant/activation regions. Of that spare, the workspace may take
+# this fraction. Subtracting the reserve first is what prevents an OOM that the
+# old "fraction of total free VRAM" cap allowed — free VRAM is sampled before
+# the model is loaded, so a generous workspace would otherwise leave no room for
+# the weights + consts and the build would OOM mid-tactic-search anyway. The
+# floor still applies — going below it starves tactic selection and raises WER.
+_WORKSPACE_VRAM_FRACTION = 0.5
+_BUILD_MEMORY_RESERVE_MB = 2048
+_MIN_WORKSPACE_MB = 256
+
+
+def auto_workspace_mb(model_name: str) -> int:
+    """Choose a default TensorRT build-time workspace budget, in MiB.
+
+    Picks a target by model size — larger models get a more generous
+    tactic-search budget — then clamps it so the workspace leaves room for the
+    rest of the build. The clamp sets aside ``_BUILD_MEMORY_RESERVE_MB`` of the
+    currently-free VRAM for the resident weights and TensorRT's const/activation
+    regions, then lets the workspace take ``_WORKSPACE_VRAM_FRACTION`` of what
+    remains. This keeps a build from reserving so much scratch that the weights
+    and consts can no longer fit (which OOMs the build on a small GPU). Falls
+    back to the unclamped target when CUDA memory info is unavailable.
+
+    This only chooses the *default*; an explicit ``--max-workspace-mb`` always
+    takes precedence. The returned value is the build-time tactic-search
+    ceiling, not a runtime allocation — see ``WhisperTRTBuilder``.
+
+    Args:
+        model_name: The Whisper model name (e.g., "tiny", "base", "small",
+            "medium", "large-v2"). Determines the base workspace target, with
+            larger models receiving more generous budgets.
+
+    Returns:
+        int: The build-time workspace ceiling in MiB. Returns the model-size
+            target when CUDA memory info is unavailable (no device or not
+            initialized); otherwise returns the minimum of the target and a
+            VRAM-based cap, but never less than ``_MIN_WORKSPACE_MB``.
+
+    Raises:
+        RuntimeError: If ``torch.cuda.mem_get_info()`` is called but CUDA
+            runtime encounters an error (caught and handled by falling back
+            to the unclamped target).
+        AssertionError: If ``torch.cuda.mem_get_info()`` is called but CUDA
+            is not properly initialized (caught and handled by falling back
+            to the unclamped target).
+    """
+    target = (
+        _LARGE_WORKSPACE_MB if model_name in LARGE_MODELS else _DEFAULT_WORKSPACE_MB
+    )
+    try:
+        free_bytes, _total = torch.cuda.mem_get_info()
+    except (RuntimeError, AssertionError):
+        # No CUDA device / not initialized: trust the model-size target.
+        return target
+    spare_mb = free_bytes / (1 << 20) - _BUILD_MEMORY_RESERVE_MB
+    cap_mb = int(_WORKSPACE_VRAM_FRACTION * spare_mb)
+    return max(_MIN_WORKSPACE_MB, min(target, cap_mb))
+
+
 class WhisperTRTBuilder:
     """Factory for building and loading TensorRT-backed Whisper checkpoints."""
 
@@ -608,9 +726,14 @@ class WhisperTRTBuilder:
     @classmethod
     @torch.no_grad()
     def _load_model_once(cls) -> ModelDimensions:
-        """Load base Whisper model once per builder class and cache dimensions."""
+        """Cache the base Whisper model's dimensions (loaded on CPU).
+
+        Only ``.dims`` (plain metadata) is needed here, so the model is never
+        moved to the GPU — a ``.cuda()`` here would reserve a full model's worth
+        of VRAM in torch's cache just to read shapes, starving the build.
+        """
         if cls._dims is None:
-            cls._dims = load_model(cls.model).cuda().eval().dims
+            cls._dims = load_model(cls.model).dims
         return cls._dims
 
     @classmethod
@@ -633,6 +756,7 @@ class WhisperTRTBuilder:
         xa = torch.randn(1, dims.n_audio_ctx, dims.n_audio_state).cuda()
         # disable_sdpa is unnecessary here (no attention is computed) but keeps
         # the trace on whisper's plain Linear projections.
+        _reclaim_memory()
         with disable_sdpa():
             return _torch2trt_convert(
                 module,
@@ -668,6 +792,7 @@ class WhisperTRTBuilder:
         cross_kv = torch.randn(2, n_layers, 1, n_audio_ctx, n_state).cuda()
         mask = torch.zeros(opt_len, opt_len).cuda()
 
+        _reclaim_memory()
         with disable_sdpa():
             return _torch2trt_convert(
                 module,
@@ -720,6 +845,7 @@ class WhisperTRTBuilder:
         self_kv = torch.randn(2, n_layers, 1, opt_past, n_state).cuda()
         cross_kv = torch.randn(2, n_layers, 1, n_audio_ctx, n_state).cuda()
 
+        _reclaim_memory()
         with disable_sdpa():
             return _torch2trt_convert(
                 module,
@@ -769,6 +895,7 @@ class WhisperTRTBuilder:
         # expression is a Tensor and SDPA rejects it (is_causal must be a
         # bool). Convert via whisper's manual-attention path instead — it is
         # mathematically identical and applies the mask explicitly.
+        _reclaim_memory()
         with disable_sdpa():
             return _torch2trt_convert(
                 decoder_blocks_module,
@@ -837,6 +964,7 @@ class WhisperTRTBuilder:
         )
         # Trace through whisper's manual-attention path (not SDPA) for the
         # same reason as build_text_decoder_engine.
+        _reclaim_memory()
         with disable_sdpa():
             return _torch2trt_convert(
                 encoder_module,
@@ -865,9 +993,15 @@ class WhisperTRTBuilder:
 
     @classmethod
     @torch.no_grad()
-    def get_text_decoder_extra_state(cls) -> dict[str, Any]:
-        """Return non-engine text-decoder state needed at runtime."""
-        model_inst = load_model(cls.model).cuda().eval()
+    def get_text_decoder_extra_state(cls, model_inst: Any = None) -> dict[str, Any]:
+        """Return non-engine text-decoder state needed at runtime.
+
+        Pass an already-loaded (CPU) model to reuse it; otherwise one is loaded.
+        Only small params/buffers are read out for the checkpoint (re-homed to
+        CUDA at load time), so the model stays on CPU.
+        """
+        if model_inst is None:
+            model_inst = load_model(cls.model)
         return {
             "token_embedding": model_inst.decoder.token_embedding.state_dict(),
             "positional_embedding": model_inst.decoder.positional_embedding,
@@ -877,9 +1011,13 @@ class WhisperTRTBuilder:
 
     @classmethod
     @torch.no_grad()
-    def get_audio_encoder_extra_state(cls) -> dict[str, Any]:
-        """Return non-engine audio-encoder state needed at runtime."""
-        model_inst = load_model(cls.model).cuda().eval()
+    def get_audio_encoder_extra_state(cls, model_inst: Any = None) -> dict[str, Any]:
+        """Return non-engine audio-encoder state needed at runtime.
+
+        Pass an already-loaded (CPU) model to reuse it; otherwise one is loaded.
+        """
+        if model_inst is None:
+            model_inst = load_model(cls.model)
         return {"positional_embedding": model_inst.encoder.positional_embedding}
 
     @classmethod
@@ -897,27 +1035,52 @@ class WhisperTRTBuilder:
                 f"Valid options: {list(_ENGINE_SCHEMA.keys())}"
             )
         if cls.decoder_mode == "simple":
-            return {"text_decoder_engine": cls.build_text_decoder_engine().state_dict()}
-        return {
-            "cross_kv_engine": cls.build_cross_kv_engine().state_dict(),
-            "prefill_engine": cls.build_prefill_engine().state_dict(),
-            "decoder_step_engine": cls.build_decoder_step_engine().state_dict(),
-        }
+            engines = {
+                "text_decoder_engine": cls.build_text_decoder_engine().state_dict()
+            }
+            _reclaim_memory()
+            return engines
+        # Build sequentially, reclaiming each engine's host-side build buffers
+        # (ONNX protobuf, TRT parser/builder) before the next load_model, so a
+        # finished engine's memory doesn't overlap the next engine's
+        # model-sized load transient and inflate the peak.
+        engines = {"cross_kv_engine": cls.build_cross_kv_engine().state_dict()}
+        _reclaim_memory()
+        engines["prefill_engine"] = cls.build_prefill_engine().state_dict()
+        _reclaim_memory()
+        engines["decoder_step_engine"] = cls.build_decoder_step_engine().state_dict()
+        _reclaim_memory()
+        return engines
 
     @classmethod
     @torch.no_grad()
     def build(cls, output_path: str, verbose: bool = False) -> None:
         """Build and persist a TensorRT checkpoint for this Whisper variant."""
         cls.verbose = verbose
-        checkpoint = {
+        # Harvest all non-engine state (dims + the small decoder/encoder
+        # tensors) from a single up-front model load while host RAM is still
+        # free, then release the model before the memory-heavy engine builds.
+        # Previously each extra-state read did its own full-model load, and the
+        # audio one ran after every engine was built and held for the
+        # checkpoint — a model-sized host transient on top of the peak that
+        # OOM-killed RAM-constrained hosts. ``del base`` frees the bulk weights;
+        # the small harvested tensors are kept alive by the dicts below.
+        base = load_model(cls.model)
+        cls._dims = base.dims  # cache so the build methods don't reload for dims
+        checkpoint: dict[str, Any] = {
             "whisper_trt_version": __version__,
-            "dims": asdict(load_model(cls.model).dims),
+            "dims": asdict(base.dims),
             "decoder_mode": cls.decoder_mode,
-            **cls._build_decoder_engines(),
-            "text_decoder_extra_state": cls.get_text_decoder_extra_state(),
-            "audio_encoder_engine": cls.build_audio_encoder_engine().state_dict(),
-            "audio_encoder_extra_state": cls.get_audio_encoder_extra_state(),
+            "text_decoder_extra_state": cls.get_text_decoder_extra_state(base),
+            "audio_encoder_extra_state": cls.get_audio_encoder_extra_state(base),
         }
+        del base
+        _reclaim_memory()
+        checkpoint.update(cls._build_decoder_engines())
+        checkpoint["audio_encoder_engine"] = (
+            cls.build_audio_encoder_engine().state_dict()
+        )
+        _reclaim_memory()
         torch.save(checkpoint, output_path)
 
     @classmethod

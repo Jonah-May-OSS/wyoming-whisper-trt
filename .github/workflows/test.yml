@@ -110,7 +110,7 @@ jobs:
 
           # Start the server in the background, redirecting output to server.log
           nohup python -m wyoming_whisper_trt.__main__ \
-            --model base \
+            --model medium \
             --uri $TEST_URI \
             --data-dir $DATA_DIR \
             --download-dir $DOWNLOAD_DIR \

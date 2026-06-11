@@ -28,7 +28,10 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from whisper.normalizers import BasicTextNormalizer, EnglishTextNormalizer
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROGRAM_DIR = SCRIPT_DIR.parent
@@ -130,7 +133,7 @@ def _word_edit_distance(ref: list[str], hyp: list[str]) -> int:
     return prev[-1]
 
 
-def _make_normalizer(language: str) -> "BasicTextNormalizer":
+def _make_normalizer(language: str) -> "BasicTextNormalizer | EnglishTextNormalizer":
     from whisper.normalizers import BasicTextNormalizer, EnglishTextNormalizer
 
     if language in ("en", "auto"):
@@ -230,7 +233,8 @@ def _enable_detailed_profiling() -> bool:
         return False
 
 
-def _apply_builder_config(args: argparse.Namespace, compute_type: str) -> None:
+def _apply_builder_config(args: argparse.Namespace, compute_type: str) -> int:
+    """Apply benchmark settings to WhisperTRTBuilder; return its workspace MiB."""
     from whisper_trt.model import WhisperTRTBuilder
 
     WhisperTRTBuilder.quant_mode = compute_type
@@ -238,6 +242,7 @@ def _apply_builder_config(args: argparse.Namespace, compute_type: str) -> None:
     WhisperTRTBuilder.decoder_mode = args.decoder_mode
     if args.max_workspace_mb is not None:
         WhisperTRTBuilder.max_workspace_size = args.max_workspace_mb << 20
+    return WhisperTRTBuilder.max_workspace_size >> 20
 
 
 def _engine_blob_sizes(engine_path: Path) -> dict[str, int]:
@@ -326,11 +331,13 @@ def _run_single(args: argparse.Namespace) -> dict[str, Any]:
     if args.detailed_build:
         _enable_detailed_profiling()
     compute_type = args.compute_type[0]
-    _apply_builder_config(args, compute_type)
-
-    workspace_mb = args.max_workspace_mb if args.max_workspace_mb is not None else (WhisperTRTBuilder.max_workspace_size >> 20)
+    # _apply_builder_config mutates WhisperTRTBuilder (consumed by
+    # load_trt_model below) and returns the resolved workspace budget, which
+    # also keys the engine cache filename.
     engine_path = Path(get_cache_dir()) / get_model_filename(
-        args.model, compute_type, max_workspace_mb=workspace_mb
+        args.model,
+        compute_type,
+        max_workspace_mb=_apply_builder_config(args, compute_type),
     )
     if args.force_rebuild and engine_path.exists():
         logger.info("Removing cached engine %s", engine_path)

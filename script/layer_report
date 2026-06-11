@@ -153,6 +153,21 @@ def _print_report(report: dict[str, Any], list_layers: bool) -> None:
         print(f"  {report['note']}")
 
 
+def _cached_engine_path(args: argparse.Namespace) -> Path:
+    """Resolve the cached engine path for the requested model/compute config."""
+    from whisper_trt.cache import get_cache_dir
+    from whisper_trt.model import WhisperTRTBuilder, get_model_filename
+
+    workspace_mb = (
+        args.max_workspace_mb
+        if args.max_workspace_mb is not None
+        else (WhisperTRTBuilder.max_workspace_size >> 20)
+    )
+    return Path(get_cache_dir()) / get_model_filename(
+        args.model, args.compute_type, args.decoder_mode, max_workspace_mb=workspace_mb
+    )
+
+
 def main() -> None:
     """Locate the cached engine file and report each engine's precisions."""
     from _common import ensure_venv_python
@@ -162,20 +177,12 @@ def main() -> None:
 
     import torch
 
-    from whisper_trt.cache import get_cache_dir, set_cache_dir
-    from whisper_trt.model import WhisperTRTBuilder, get_model_filename
+    from whisper_trt.cache import set_cache_dir
 
     if args.data_dir:
         set_cache_dir(args.data_dir)
 
-    workspace_mb = (
-        args.max_workspace_mb
-        if args.max_workspace_mb is not None
-        else (WhisperTRTBuilder.max_workspace_size >> 20)
-    )
-    engine_path = Path(get_cache_dir()) / get_model_filename(
-        args.model, args.compute_type, args.decoder_mode, max_workspace_mb=workspace_mb
-    )
+    engine_path = _cached_engine_path(args)
     if not engine_path.exists():
         raise SystemExit(
             f"No cached engine at {engine_path}. Build it first "

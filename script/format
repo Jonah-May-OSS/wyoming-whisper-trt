@@ -1,22 +1,17 @@
 #!/usr/bin/env python3
+"""Auto-format the package and tests with ruff, black, and isort in the venv."""
+
 import subprocess
-import venv
-from pathlib import Path
 
-_DIR = Path(__file__).parent
-_PROGRAM_DIR = _DIR.parent
-_VENV_DIR = _PROGRAM_DIR / ".venv"
-_MODULE_DIR = _PROGRAM_DIR / "wyoming_whisper_trt"
-_TESTS_DIR = _PROGRAM_DIR / "tests"
+from _common import MODULE_DIR, TESTS_DIR, venv_python
 
-_FORMAT_DIRS = [_MODULE_DIR, _TESTS_DIR]
-
-context = venv.EnvBuilder().ensure_directories(_VENV_DIR)
+_FORMAT_DIRS = [MODULE_DIR, TESTS_DIR]
+python = venv_python()
 
 # Run ruff for fast auto-fixes and formatting
-subprocess.check_call([context.env_exe, "-m", "ruff", "check", "--fix"] + _FORMAT_DIRS)
-subprocess.check_call([context.env_exe, "-m", "ruff", "format"] + _FORMAT_DIRS)
+subprocess.check_call([python, "-m", "ruff", "check", "--fix", *_FORMAT_DIRS])
+subprocess.check_call([python, "-m", "ruff", "format", *_FORMAT_DIRS])
 
 # Run traditional formatters
-subprocess.check_call([context.env_exe, "-m", "black"] + _FORMAT_DIRS)
-subprocess.check_call([context.env_exe, "-m", "isort"] + _FORMAT_DIRS)
+subprocess.check_call([python, "-m", "black", *_FORMAT_DIRS])
+subprocess.check_call([python, "-m", "isort", *_FORMAT_DIRS])

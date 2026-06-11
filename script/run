@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-import sys
-import subprocess
-import venv
+"""Bootstrap dependencies if needed, then launch the wyoming_whisper_trt server."""
+
 import importlib.util
+import subprocess
+import sys
+import venv
 from pathlib import Path
 
 # Paths
@@ -11,13 +13,16 @@ PROGRAM_DIR = SCRIPT_DIR.parent
 VENV_DIR = PROGRAM_DIR / ".venv"
 SETUP_SCRIPT = Path("/usr/src/wyoming-whisper-trt/script/setup")
 
+
 def is_package_installed(package_name: str) -> bool:
     """
     Check if a Python package is importable in the *current* Python environment.
     """
     return importlib.util.find_spec(package_name) is not None
 
+
 def main():
+    """Ensure dependencies are installed, then run the server inside the venv."""
     # 1) Conditionally run `script/setup` if `torch2trt` is not installed.
     if not is_package_installed("torch2trt"):
         print("torch2trt not found. Installing dependencies via script/setup...")
@@ -32,9 +37,10 @@ def main():
     context = venv.EnvBuilder(with_pip=True).ensure_directories(VENV_DIR)
 
     # 3) Run your main code (wyoming_whisper_trt) inside the venv
-    cmd = [context.env_exe, "-m", "wyoming_whisper_trt"] + sys.argv[1:]
+    cmd = [context.env_exe, "-m", "wyoming_whisper_trt", *sys.argv[1:]]
     print(f"Launching: {cmd}")
     subprocess.check_call(cmd)
+
 
 if __name__ == "__main__":
     main()

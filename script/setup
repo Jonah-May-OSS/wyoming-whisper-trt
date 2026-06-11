@@ -1,18 +1,27 @@
 #!/usr/bin/env python3
+"""Create the venv, install requirements, and install torch2trt."""
+
 import argparse
+import os
 import subprocess
 import venv
 from pathlib import Path
-import os
 
 _DIR = Path(__file__).parent
 _PROGRAM_DIR = _DIR.parent
 _VENV_DIR = _PROGRAM_DIR / ".venv"
-_TORCH2TRT_DIR = _PROGRAM_DIR / "torch2trt"  # Update this path if torch2trt is located elsewhere
+_TORCH2TRT_DIR = (
+    _PROGRAM_DIR / "torch2trt"
+)  # Update this path if torch2trt is located elsewhere
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--dev", action="store_true", help="Install dev requirements")
-parser.add_argument("--system_site_packages", action="store_true", help="Include system site packages in the virtual environment", default=False)
+parser.add_argument(
+    "--system_site_packages",
+    action="store_true",
+    help="Include system site packages in the virtual environment",
+    default=False,
+)
 args = parser.parse_args()
 
 # Create virtual environment
@@ -24,43 +33,17 @@ builder.create(_VENV_DIR)
 
 # Upgrade dependencies
 pip = [context.env_exe, "-m", "pip"]
-subprocess.check_call(pip + ["install", "--upgrade", "pip"])
-subprocess.check_call(pip + ["install", "--upgrade", "setuptools", "wheel"])
+subprocess.check_call([*pip, "install", "--upgrade", "pip"])
+subprocess.check_call([*pip, "install", "--upgrade", "setuptools", "wheel"])
 
 # Install requirements
-subprocess.check_call(pip + ["install", "-r", str(_PROGRAM_DIR / "requirements.txt")])
+subprocess.check_call([*pip, "install", "-r", str(_PROGRAM_DIR / "requirements.txt")])
 
 if args.dev:
     # Install dev requirements
     subprocess.check_call(
-        pip + ["install", "-r", str(_PROGRAM_DIR / "requirements_dev.txt")]
+        [*pip, "install", "-r", str(_PROGRAM_DIR / "requirements_dev.txt")]
     )
-
-# Apply patches to torch2trt for PyTorch 2.9+ compatibility
-patches_dir = _PROGRAM_DIR / "patches"
-if patches_dir.exists():
-    patch_file = patches_dir / "torch2trt-pytorch29-dynamic-shapes.patch"
-    if patch_file.exists():
-        print(f"Applying patch: {patch_file}")
-        try:
-            # Check if patch is already applied by testing if it applies cleanly in reverse
-            result = subprocess.run(
-                ["git", "apply", "--check", "--reverse", str(patch_file)],
-                cwd=_TORCH2TRT_DIR,
-                capture_output=True
-            )
-            if result.returncode == 0:
-                print("Patch already applied, skipping...")
-            else:
-                # Patch not applied, apply it now
-                subprocess.check_call(
-                    ["git", "apply", str(patch_file)],
-                    cwd=_TORCH2TRT_DIR
-                )
-                print("Patch applied successfully")
-        except subprocess.CalledProcessError as e:
-            print(f"Warning: Failed to apply patch: {e}")
-            print("Continuing with installation...")
 
 # Install torch2trt
 os.chdir(_TORCH2TRT_DIR)

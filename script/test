@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Run the pytest test suite inside the project venv."""
+
 import subprocess
 import sys
 import venv
@@ -10,4 +12,4 @@ _VENV_DIR = _PROGRAM_DIR / ".venv"
 _TEST_DIR = _PROGRAM_DIR / "tests"
 
 context = venv.EnvBuilder().ensure_directories(_VENV_DIR)
-subprocess.check_call([context.env_exe, "-m", "pytest", _TEST_DIR] + sys.argv[1:])
+subprocess.check_call([context.env_exe, "-m", "pytest", _TEST_DIR, *sys.argv[1:]])

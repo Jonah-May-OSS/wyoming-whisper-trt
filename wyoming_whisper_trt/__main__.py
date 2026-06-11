@@ -25,6 +25,7 @@ from wyoming.server import AsyncServer
 from whisper_trt import (
     WhisperTRT,
     WhisperTRTBuilder,
+    auto_workspace_mb,
     get_model_filename,
     load_trt_model,
 )
@@ -300,13 +301,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-workspace-mb",
         type=int,
-        default=WhisperTRTBuilder.max_workspace_size >> 20,
+        default=None,
         help=(
             "Per-engine TensorRT build-time scratch budget in MiB. This bounds "
             "the workspace tactic search may use; it does not control runtime "
-            "VRAM (use --decoder-mode for that). Keep it generous; raise it "
-            "only if a large model fails to build. Engines are cached by "
-            "compute-type, decoder-mode, and workspace budget."
+            "VRAM (use --decoder-mode for that). Defaults to an automatic budget "
+            "chosen from the model size and free VRAM (more generous for large "
+            "models). Set this only to override that default. Engines are cached "
+            "by compute-type, decoder-mode, and workspace budget."
         ),
     )
     parser.add_argument(
@@ -349,8 +351,8 @@ async def main() -> None:
     """Main entry point."""
     args = _parse_args()
 
-    # Validate max-workspace-mb
-    if args.max_workspace_mb <= 0:
+    # Validate max-workspace-mb (None means "auto", resolved below)
+    if args.max_workspace_mb is not None and args.max_workspace_mb <= 0:
         logger.error(
             "Invalid --max-workspace-mb value: %d. Must be a positive integer.",
             args.max_workspace_mb,
@@ -371,8 +373,12 @@ async def main() -> None:
     WhisperTRTBuilder.decoder_mode = args.decoder_mode
     logger.debug("Decoder mode set to '%s'.", args.decoder_mode)
 
-    # Apply the TensorRT build-time workspace budget (an OOM escape hatch for
-    # large models; does not control runtime VRAM).
+    # Resolve the build-time workspace budget. When unset, pick one from the
+    # model size and free VRAM (more generous for large models); an explicit
+    # --max-workspace-mb always wins. Does not control runtime VRAM.
+    if args.max_workspace_mb is None:
+        args.max_workspace_mb = auto_workspace_mb(model_name)
+        logger.debug("Auto-selected TensorRT workspace: %d MiB.", args.max_workspace_mb)
     WhisperTRTBuilder.max_workspace_size = args.max_workspace_mb << 20
     logger.debug("TensorRT max workspace set to %d MiB.", args.max_workspace_mb)
 
