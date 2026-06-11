@@ -997,27 +997,44 @@ class WhisperTRTBuilder:
                 f"Valid options: {list(_ENGINE_SCHEMA.keys())}"
             )
         if cls.decoder_mode == "simple":
-            return {"text_decoder_engine": cls.build_text_decoder_engine().state_dict()}
-        return {
-            "cross_kv_engine": cls.build_cross_kv_engine().state_dict(),
-            "prefill_engine": cls.build_prefill_engine().state_dict(),
-            "decoder_step_engine": cls.build_decoder_step_engine().state_dict(),
-        }
+            engines = {
+                "text_decoder_engine": cls.build_text_decoder_engine().state_dict()
+            }
+            _free_cached_vram()
+            return engines
+        # Build sequentially, reclaiming each engine's host-side build buffers
+        # (ONNX protobuf, TRT parser/builder) before the next load_model, so a
+        # finished engine's memory doesn't overlap the next engine's
+        # model-sized load transient and inflate the peak.
+        engines = {"cross_kv_engine": cls.build_cross_kv_engine().state_dict()}
+        _free_cached_vram()
+        engines["prefill_engine"] = cls.build_prefill_engine().state_dict()
+        _free_cached_vram()
+        engines["decoder_step_engine"] = cls.build_decoder_step_engine().state_dict()
+        _free_cached_vram()
+        return engines
 
     @classmethod
     @torch.no_grad()
     def build(cls, output_path: str, verbose: bool = False) -> None:
         """Build and persist a TensorRT checkpoint for this Whisper variant."""
         cls.verbose = verbose
-        checkpoint = {
+        # Assemble the checkpoint one phase at a time, reclaiming host memory
+        # between phases (rather than in one dict literal that keeps every
+        # phase's transient buffers live at once). The decoder engines reclaim
+        # internally; here we reclaim after the encoder build.
+        checkpoint: dict[str, Any] = {
             "whisper_trt_version": __version__,
             "dims": asdict(load_model(cls.model).dims),
             "decoder_mode": cls.decoder_mode,
-            **cls._build_decoder_engines(),
-            "text_decoder_extra_state": cls.get_text_decoder_extra_state(),
-            "audio_encoder_engine": cls.build_audio_encoder_engine().state_dict(),
-            "audio_encoder_extra_state": cls.get_audio_encoder_extra_state(),
         }
+        checkpoint.update(cls._build_decoder_engines())
+        checkpoint["text_decoder_extra_state"] = cls.get_text_decoder_extra_state()
+        checkpoint["audio_encoder_engine"] = (
+            cls.build_audio_encoder_engine().state_dict()
+        )
+        _free_cached_vram()
+        checkpoint["audio_encoder_extra_state"] = cls.get_audio_encoder_extra_state()
         torch.save(checkpoint, output_path)
 
     @classmethod
