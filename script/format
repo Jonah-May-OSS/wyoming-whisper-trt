@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Auto-format the package and tests with ruff, black, and isort in the venv."""
+
 import subprocess
 import venv
 from pathlib import Path

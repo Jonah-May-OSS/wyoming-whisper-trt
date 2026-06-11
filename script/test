@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Run the pytest test suite inside the project venv."""
+
 import subprocess
 import sys
 import venv

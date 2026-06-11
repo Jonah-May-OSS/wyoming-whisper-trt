@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Build a distributable wheel for the project using the venv."""
+
 import subprocess
 import venv
 from pathlib import Path

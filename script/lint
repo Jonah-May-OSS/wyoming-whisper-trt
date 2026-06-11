@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Lint the package and tests with ruff, black, isort, and mypy in the venv."""
+
 import subprocess
 import venv
 from pathlib import Path

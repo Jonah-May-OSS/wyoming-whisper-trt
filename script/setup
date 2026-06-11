@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Create the venv, install requirements, and patch and install torch2trt."""
+
 import argparse
 import subprocess
 import venv

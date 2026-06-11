@@ -19,6 +19,9 @@
   "reportMissingParameterType": "none",
   "reportUnnecessaryIsInstance": "none",
   "exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.*",
     "torch2trt"
   ],
   "executionEnvironments": [

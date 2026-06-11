@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Bootstrap dependencies if needed, then launch the wyoming_whisper_trt server."""
+
 import sys
 import subprocess
 import venv

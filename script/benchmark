@@ -28,7 +28,10 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from whisper.normalizers import BasicTextNormalizer, EnglishTextNormalizer
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROGRAM_DIR = SCRIPT_DIR.parent
@@ -130,7 +133,7 @@ def _word_edit_distance(ref: list[str], hyp: list[str]) -> int:
     return prev[-1]
 
 
-def _make_normalizer(language: str) -> "BasicTextNormalizer":
+def _make_normalizer(language: str) -> "BasicTextNormalizer | EnglishTextNormalizer":
     from whisper.normalizers import BasicTextNormalizer, EnglishTextNormalizer
 
     if language in ("en", "auto"):
@@ -319,7 +322,11 @@ def _run_single(args: argparse.Namespace) -> dict[str, Any]:
     import torch
 
     from whisper_trt.cache import get_cache_dir, set_cache_dir
-    from whisper_trt.model import get_model_filename, load_trt_model
+    from whisper_trt.model import (
+        WhisperTRTBuilder,
+        get_model_filename,
+        load_trt_model,
+    )
 
     if args.data_dir:
         set_cache_dir(args.data_dir)
