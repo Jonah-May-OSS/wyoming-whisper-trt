@@ -962,11 +962,15 @@ class WhisperTRTBuilder:
 
     @classmethod
     @torch.no_grad()
-    def get_text_decoder_extra_state(cls) -> dict[str, Any]:
-        """Return non-engine text-decoder state needed at runtime."""
-        # Stays on CPU: only params/buffers are read out for the checkpoint
-        # (re-homed to CUDA at load time), so a GPU copy here is wasted VRAM.
-        model_inst = load_model(cls.model)
+    def get_text_decoder_extra_state(cls, model_inst: Any = None) -> dict[str, Any]:
+        """Return non-engine text-decoder state needed at runtime.
+
+        Pass an already-loaded (CPU) model to reuse it; otherwise one is loaded.
+        Only small params/buffers are read out for the checkpoint (re-homed to
+        CUDA at load time), so the model stays on CPU.
+        """
+        if model_inst is None:
+            model_inst = load_model(cls.model)
         return {
             "token_embedding": model_inst.decoder.token_embedding.state_dict(),
             "positional_embedding": model_inst.decoder.positional_embedding,
@@ -976,10 +980,13 @@ class WhisperTRTBuilder:
 
     @classmethod
     @torch.no_grad()
-    def get_audio_encoder_extra_state(cls) -> dict[str, Any]:
-        """Return non-engine audio-encoder state needed at runtime."""
-        # Stays on CPU for the same reason as get_text_decoder_extra_state.
-        model_inst = load_model(cls.model)
+    def get_audio_encoder_extra_state(cls, model_inst: Any = None) -> dict[str, Any]:
+        """Return non-engine audio-encoder state needed at runtime.
+
+        Pass an already-loaded (CPU) model to reuse it; otherwise one is loaded.
+        """
+        if model_inst is None:
+            model_inst = load_model(cls.model)
         return {"positional_embedding": model_inst.encoder.positional_embedding}
 
     @classmethod
@@ -1019,22 +1026,30 @@ class WhisperTRTBuilder:
     def build(cls, output_path: str, verbose: bool = False) -> None:
         """Build and persist a TensorRT checkpoint for this Whisper variant."""
         cls.verbose = verbose
-        # Assemble the checkpoint one phase at a time, reclaiming host memory
-        # between phases (rather than in one dict literal that keeps every
-        # phase's transient buffers live at once). The decoder engines reclaim
-        # internally; here we reclaim after the encoder build.
+        # Harvest all non-engine state (dims + the small decoder/encoder
+        # tensors) from a single up-front model load while host RAM is still
+        # free, then release the model before the memory-heavy engine builds.
+        # Previously each extra-state read did its own full-model load, and the
+        # audio one ran after every engine was built and held for the
+        # checkpoint — a model-sized host transient on top of the peak that
+        # OOM-killed RAM-constrained hosts. ``del base`` frees the bulk weights;
+        # the small harvested tensors are kept alive by the dicts below.
+        base = load_model(cls.model)
+        cls._dims = base.dims  # cache so the build methods don't reload for dims
         checkpoint: dict[str, Any] = {
             "whisper_trt_version": __version__,
-            "dims": asdict(load_model(cls.model).dims),
+            "dims": asdict(base.dims),
             "decoder_mode": cls.decoder_mode,
+            "text_decoder_extra_state": cls.get_text_decoder_extra_state(base),
+            "audio_encoder_extra_state": cls.get_audio_encoder_extra_state(base),
         }
+        del base
+        _free_cached_vram()
         checkpoint.update(cls._build_decoder_engines())
-        checkpoint["text_decoder_extra_state"] = cls.get_text_decoder_extra_state()
         checkpoint["audio_encoder_engine"] = (
             cls.build_audio_encoder_engine().state_dict()
         )
         _free_cached_vram()
-        checkpoint["audio_encoder_extra_state"] = cls.get_audio_encoder_extra_state()
         torch.save(checkpoint, output_path)
 
     @classmethod
