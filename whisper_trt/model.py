@@ -564,6 +564,47 @@ class WhisperTRT(nn.Module):
         )
 
 
+# Whisper variants whose encoder/decoder are large enough that the default
+# 1 GiB tactic-search budget is too tight: they build better (and avoid the
+# occasional build failure) with a more generous workspace. Used by
+# ``auto_workspace_mb`` to pick a default build-time scratch budget.
+LARGE_MODELS = frozenset({"large", "large-v2", "large-v3", "large-v3-turbo"})
+
+# Per-engine workspace targets in MiB, before clamping to free VRAM.
+_LARGE_WORKSPACE_MB = 4096
+_DEFAULT_WORKSPACE_MB = 1024
+# Never request more than this fraction of currently-free VRAM for the build's
+# tactic search (the workspace is reserved during the build), nor less than the
+# floor — going below it starves tactic selection and raises WER.
+_WORKSPACE_VRAM_FRACTION = 0.7
+_MIN_WORKSPACE_MB = 256
+
+
+def auto_workspace_mb(model_name: str) -> int:
+    """Choose a default TensorRT build-time workspace budget, in MiB.
+
+    Picks a target by model size — larger models get a more generous
+    tactic-search budget — then clamps it down to a safe fraction of
+    currently-free GPU VRAM so a build never reserves more scratch than the
+    device can give (which would OOM the build on a small GPU). Falls back to
+    the unclamped target when CUDA memory info is unavailable.
+
+    This only chooses the *default*; an explicit ``--max-workspace-mb`` always
+    takes precedence. The returned value is the build-time tactic-search
+    ceiling, not a runtime allocation — see ``WhisperTRTBuilder``.
+    """
+    target = (
+        _LARGE_WORKSPACE_MB if model_name in LARGE_MODELS else _DEFAULT_WORKSPACE_MB
+    )
+    try:
+        free_bytes, _total = torch.cuda.mem_get_info()
+    except (RuntimeError, AssertionError):
+        # No CUDA device / not initialized: trust the model-size target.
+        return target
+    cap_mb = int(_WORKSPACE_VRAM_FRACTION * free_bytes / (1 << 20))
+    return max(_MIN_WORKSPACE_MB, min(target, cap_mb))
+
+
 class WhisperTRTBuilder:
     """Factory for building and loading TensorRT-backed Whisper checkpoints."""
 

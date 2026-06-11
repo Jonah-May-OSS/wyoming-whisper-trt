@@ -24,18 +24,22 @@
 from .__version__ import __version__
 from .cache import get_cache_dir, set_cache_dir
 from .model import (
+    LARGE_MODELS,
     MODEL_FILENAMES,
     WhisperTRT,
     WhisperTRTBuilder,
+    auto_workspace_mb,
     get_model_filename,
     load_trt_model,
 )
 
 __all__ = [
+    "LARGE_MODELS",
     "MODEL_FILENAMES",
     "WhisperTRT",
     "WhisperTRTBuilder",
     "__version__",
+    "auto_workspace_mb",
     "get_cache_dir",
     "get_model_filename",
     "load_trt_model",
