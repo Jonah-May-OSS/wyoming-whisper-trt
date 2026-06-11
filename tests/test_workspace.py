@@ -15,7 +15,8 @@ from whisper_trt import auto_workspace_mb
 _DEFAULT_WORKSPACE_MB = 1024
 _LARGE_WORKSPACE_MB = 4096
 _MIN_WORKSPACE_MB = 256
-_VRAM_FRACTION = 0.7
+_VRAM_FRACTION = 0.5
+_BUILD_MEMORY_RESERVE_MB = 2048
 
 _MIB = 1 << 20
 
@@ -29,7 +30,8 @@ def _free_vram(mb: int):
 
 
 def test_large_model_gets_large_budget_when_vram_is_ample() -> None:
-    # 16 GiB free: 70% leaves far more than the 4 GiB target, so no clamp.
+    # 16 GiB free: even after the reserve, 50% of the spare exceeds the 4 GiB
+    # target, so no clamp.
     with _free_vram(16 * 1024):
         assert auto_workspace_mb("large-v3") == _LARGE_WORKSPACE_MB
 
@@ -39,17 +41,36 @@ def test_small_model_gets_default_budget_when_vram_is_ample() -> None:
         assert auto_workspace_mb("base") == _DEFAULT_WORKSPACE_MB
 
 
-def test_budget_is_clamped_to_a_fraction_of_free_vram() -> None:
-    # 2 GiB free -> 70% = ~1434 MiB, below the 4 GiB large-model target.
-    with _free_vram(2 * 1024):
+def test_budget_is_clamped_to_spare_vram_after_reserve() -> None:
+    # 8 GiB free (e.g. an RTX 3050): after the 2 GiB build reserve, 6 GiB is
+    # spare; the workspace takes 50% of that (~3 GiB), below the 4 GiB target.
+    with _free_vram(8 * 1024):
         budget = auto_workspace_mb("large-v3")
-    assert budget == int(_VRAM_FRACTION * 2 * 1024)
+    assert budget == int(_VRAM_FRACTION * (8 * 1024 - _BUILD_MEMORY_RESERVE_MB))
     assert budget < _LARGE_WORKSPACE_MB
 
 
+def test_reserve_is_subtracted_before_the_fraction() -> None:
+    # The reserve must come off the top: a naive "fraction of all free VRAM"
+    # would give more than the reserve-aware cap for the same free VRAM.
+    free_mb = 8 * 1024
+    with _free_vram(free_mb):
+        budget = auto_workspace_mb("large-v3")
+    naive = int(_VRAM_FRACTION * free_mb)
+    assert budget == int(_VRAM_FRACTION * (free_mb - _BUILD_MEMORY_RESERVE_MB))
+    assert budget < naive
+
+
 def test_budget_never_drops_below_the_floor() -> None:
-    # Almost no free VRAM: the 70% cap would be tiny, so the floor wins.
+    # Almost no free VRAM: spare goes negative after the reserve, so the floor
+    # wins rather than a zero/negative workspace.
     with _free_vram(64):
+        assert auto_workspace_mb("large-v3") == _MIN_WORKSPACE_MB
+
+
+def test_floor_applies_when_free_equals_reserve() -> None:
+    # Exactly the reserve free: zero spare, so the floor wins.
+    with _free_vram(_BUILD_MEMORY_RESERVE_MB):
         assert auto_workspace_mb("large-v3") == _MIN_WORKSPACE_MB
 
 
