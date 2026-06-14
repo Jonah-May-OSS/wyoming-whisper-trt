@@ -4,6 +4,6 @@ flake8==7.3.0
 pylint==4.0.5
 mypy==2.1.0
 pyright==1.1.410
-pytest==9.0.3
+pytest==9.1.0
 pytest-asyncio==1.4.0
 ruff==0.15.17
