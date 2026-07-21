@@ -45,4 +45,6 @@ python3 -m wyoming_whisper_trt \
     --decoder-mode "${DECODER_MODE:-kv}" \
     --device "${DEVICE:-cuda}" \
     --beam-size "${BEAM_SIZE:-5}" \
+    --no-speech-threshold "${NO_SPEECH_THRESHOLD:-0.6}" \
+    --silence-threshold "${SILENCE_THRESHOLD:-0.0}" \
     "$@"

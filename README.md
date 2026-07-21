@@ -280,6 +280,30 @@ Other GPU/TensorRT combinations may behave differently — run
 Guaranteed quantization would require explicit Q/DQ (e.g. via
 nvidia-modelopt), which only pays off on `medium`/`large` encoders.
 
+#### Silence hallucination suppression
+
+Fed audio with no real speech, Whisper reliably invents plausible-looking
+text — `www.mooji.org`, `Thank you for watching`, subtitle credits, and the
+like — pulled from its training data. Greedy decoding never selects the
+model's `<|nospeech|>` token (a real token always outscores it), so without a
+guard those phantom transcripts flow straight through to Home Assistant.
+
+Two gates suppress them:
+
+- **No-speech gate** (`--no-speech-threshold`, env `NO_SPEECH_THRESHOLD`,
+  default `0.6`): drops a window whose `<|nospeech|>` probability at the first
+  decode position is at or above the threshold, exactly as upstream
+  `whisper.transcribe` does. This is the accurate check and is enabled by
+  default. Set it above `1.0` to disable.
+- **Energy gate** (`--silence-threshold`, env `SILENCE_THRESHOLD`, default
+  `0.0` = disabled): an optional cheap hard cutoff that skips transcription
+  entirely when the audio's normalized ([-1, 1]) RMS is below the threshold.
+  Useful as belt-and-suspenders, but can clip genuinely quiet speech, so it is
+  off unless you opt in (e.g. `0.005`).
+
+Both cause the server to emit an empty transcript, which Home Assistant
+handles as "nothing was said".
+
 ### Testing and Linting Tools
 
 This project uses modern Python development tools:

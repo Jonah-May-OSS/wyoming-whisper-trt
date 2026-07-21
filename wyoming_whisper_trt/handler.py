@@ -74,6 +74,13 @@ def wav_bytes_to_np_array(wav_bytes: bytes) -> np.ndarray:
     return np.ascontiguousarray(audio, dtype=np.float32)
 
 
+def _rms(audio: np.ndarray) -> float:
+    """Root-mean-square amplitude of normalized ([-1, 1]) mono audio."""
+    if audio.size == 0:
+        return 0.0
+    return float(np.sqrt(np.mean(np.square(audio, dtype=np.float64))))
+
+
 @dataclass
 class HandlerSettings:
     """Runtime settings for the event handler."""
@@ -81,6 +88,13 @@ class HandlerSettings:
     initial_prompt: str | None = None
     streaming: bool = False
     default_language: str | None = None
+    # Suppress Whisper's silence hallucinations (e.g. "www.mooji.org"). The
+    # no-speech gate drops a window whose ``<|nospeech|>`` probability meets
+    # this threshold; ``None`` disables it. The RMS gate short-circuits audio
+    # quieter than this normalized ([-1, 1]) root-mean-square before it ever
+    # reaches the model; ``0.0`` disables it.
+    no_speech_threshold: float | None = 0.6
+    silence_rms_threshold: float = 0.0
 
 
 @dataclass
@@ -197,6 +211,18 @@ class WhisperTrtEventHandler(AsyncEventHandler):
 
         wav_bytes = self._wav_buffer.getvalue()
         audio_np = wav_bytes_to_np_array(wav_bytes)
+
+        # Cheap energy gate: near-silent audio only ever produces Whisper
+        # hallucinations, so short-circuit it before touching the model. The
+        # no-speech gate inside transcribe() is the accurate check; this is an
+        # optional hard cutoff, disabled by default (threshold 0.0).
+        threshold = self._settings.silence_rms_threshold
+        if threshold > 0.0 and _rms(audio_np) < threshold:
+            logger.debug("Audio below silence RMS threshold; emitting empty transcript")
+            await self._emit_transcript("")
+            self._wav_buffer = io.BytesIO()
+            return
+
         loop = asyncio.get_event_loop()
         try:
             async with self.model_lock:
@@ -207,6 +233,7 @@ class WhisperTrtEventHandler(AsyncEventHandler):
                         self._language or "auto",
                         stream=False,
                         initial_prompt=prompt,
+                        no_speech_threshold=self._settings.no_speech_threshold,
                     ),
                 )
             final_text = result.get("text", "").strip()
@@ -219,10 +246,19 @@ class WhisperTrtEventHandler(AsyncEventHandler):
             self._wav_buffer = io.BytesIO()
             return
 
-        # for streaming clients: TranscriptStart → TranscriptChunk → Transcript → TranscriptStop
-        # for non-streaming clients: Transcript only
-        # (HA's wyoming/stt.py ignores streaming events and waits for Transcript)
+        await self._emit_transcript(final_text)
 
+        # reset for next utterance
+
+        self._wav_buffer = io.BytesIO()
+
+    async def _emit_transcript(self, final_text: str) -> None:
+        """Emit a completed transcript, matching the client's streaming mode.
+
+        For streaming clients: TranscriptStart → TranscriptChunk → Transcript →
+        TranscriptStop. For non-streaming clients: Transcript only. (HA's
+        wyoming/stt.py ignores the streaming events and waits for Transcript.)
+        """
         if self._settings.streaming:
             await self.write_event(TranscriptStart(language=self._language).event())
             if final_text:
@@ -231,10 +267,6 @@ class WhisperTrtEventHandler(AsyncEventHandler):
             await self.write_event(TranscriptStop().event())
         else:
             await self.write_event(Transcript(text=final_text).event())
-
-        # reset for next utterance
-
-        self._wav_buffer = io.BytesIO()
 
     async def _handle_transcribe(self, event: Event) -> None:
         # allow client to change language on the fly

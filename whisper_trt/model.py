@@ -437,11 +437,18 @@ class WhisperTRT(nn.Module):
         decode_start = time.perf_counter()
 
         last_token_id = -1
+        first_step = True
         for _ in range(request.cur_len, request.max_len):
             token_logits = self.logits(
                 request.out_tokens[:, : request.cur_len],
                 request.audio_features,
             )
+            if first_step:
+                first_step = False
+                if self._is_no_speech(
+                    tokenizer, token_logits, request.no_speech_threshold
+                ):
+                    return "", [], time.perf_counter() - decode_start
             # One GPU->CPU sync per token; reuse the int for the buffer write
             # and the stop check rather than reading the tensor back twice.
             last_token_id = int(token_logits.argmax(dim=-1)[0, -1].item())
@@ -480,6 +487,11 @@ class WhisperTRT(nn.Module):
         decode_start = time.perf_counter()
         decoder = cast(TextDecoderTRTKV, self.decoder)
         logits, self_kv, cross_kv = self._prime_cache(request)
+
+        # ``logits`` here predict the first generated token, so this is the
+        # position Whisper evaluates for no-speech (see _is_no_speech).
+        if self._is_no_speech(tokenizer, logits, request.no_speech_threshold):
+            return "", [], time.perf_counter() - decode_start
 
         last_token_id = -1
         while request.cur_len < request.max_len:
@@ -529,6 +541,7 @@ class WhisperTRT(nn.Module):
         language: str,
         stream: bool,
         initial_prompt: str | None,
+        no_speech_threshold: float | None = None,
     ) -> tuple[str, list[str], float]:
         """Decode a mel tensor into final text and optional transcript chunks."""
         max_len = self.dims.n_text_ctx + 1
@@ -549,6 +562,7 @@ class WhisperTRT(nn.Module):
                 max_len=max_len,
                 audio_features=audio_features,
                 stream=stream,
+                no_speech_threshold=no_speech_threshold,
             )
             return self._decode_sequence(tokenizer, request)
 
@@ -559,8 +573,14 @@ class WhisperTRT(nn.Module):
         language: str = "auto",
         stream: bool = False,
         initial_prompt: str | None = None,
+        no_speech_threshold: float | None = None,
     ) -> dict[str, Any]:
-        """Transcribe audio with optional chunk emissions and an initial prompt."""
+        """Transcribe audio with optional chunk emissions and an initial prompt.
+
+        When ``no_speech_threshold`` is set, a window the model judges to be
+        non-speech (``<|nospeech|>`` probability at or above the threshold)
+        returns empty text instead of a hallucinated transcript.
+        """
         start_time = time.perf_counter()
         audio_array = self._normalize_audio_input(audio)
         mel, load_time = self._audio_to_mel(audio_array)
@@ -569,6 +589,7 @@ class WhisperTRT(nn.Module):
             language,
             stream,
             initial_prompt,
+            no_speech_threshold,
         )
 
         self.stream.synchronize()
@@ -598,6 +619,31 @@ class WhisperTRT(nn.Module):
         if hasattr(tokenizer, "all_language_codes"):
             return list(tokenizer.all_language_codes)
         return ["en"]
+
+    def _is_no_speech(
+        self,
+        tokenizer: Tokenizer,
+        first_logits: Tensor,
+        threshold: float | None,
+    ) -> bool:
+        """Whether the audio is silence/non-speech per the ``<|nospeech|>`` token.
+
+        Whisper emits a dedicated ``<|nospeech|>`` token whose probability at the
+        first decode position estimates how likely the window contains no speech.
+        Greedy decoding never selects it (a real token always outscores it), so
+        on silence the model instead hallucinates plausible-looking text
+        ("www.mooji.org", "Thank you for watching", ...). Gating on this
+        probability — as upstream ``whisper.transcribe`` does — suppresses those
+        phantom transcripts. Returns ``False`` when the check is disabled
+        (``threshold is None``) or the tokenizer lacks the token.
+        """
+        if threshold is None:
+            return False
+        no_speech_id = getattr(tokenizer, "no_speech", None)
+        if no_speech_id is None:
+            return False
+        probs = torch.softmax(first_logits[0, -1, :].float(), dim=-1)
+        return float(probs[no_speech_id].item()) >= threshold
 
     def _decode_tokens(self, tokens: torch.Tensor) -> str:
         """Decode token tensor to clean text without internal control markers."""

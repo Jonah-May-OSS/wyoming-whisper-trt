@@ -322,6 +322,27 @@ def _parse_args() -> argparse.Namespace:
         help="Enable partial transcription streaming",
     )
     parser.add_argument(
+        "--no-speech-threshold",
+        type=float,
+        default=0.6,
+        help=(
+            "Suppress silence hallucinations (e.g. 'www.mooji.org'): drop a "
+            "window whose '<|nospeech|>' probability is at or above this value "
+            "(0.0-1.0). Set to a value > 1 to disable. Default: 0.6."
+        ),
+    )
+    parser.add_argument(
+        "--silence-threshold",
+        type=float,
+        default=0.0,
+        help=(
+            "Optional hard energy gate: skip transcription for audio whose "
+            "normalized ([-1, 1]) RMS is below this value, emitting an empty "
+            "transcript. 0.0 (default) disables it; the no-speech gate is the "
+            "accurate check."
+        ),
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable DEBUG level logging",
@@ -445,6 +466,8 @@ async def main() -> None:
             initial_prompt=args.initial_prompt,
             streaming=args.streaming,
             default_language=args.language,
+            no_speech_threshold=args.no_speech_threshold,
+            silence_rms_threshold=args.silence_threshold,
         ),
     )
 

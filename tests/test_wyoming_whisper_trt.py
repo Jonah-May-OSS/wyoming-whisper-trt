@@ -27,7 +27,7 @@ from wyoming.audio import AudioStart, AudioStop, wav_to_chunks
 from wyoming.event import async_read_event, async_write_event
 from wyoming.info import Describe, Info
 
-from wyoming_whisper_trt.handler import TARGET_RATE, wav_bytes_to_np_array
+from wyoming_whisper_trt.handler import TARGET_RATE, _rms, wav_bytes_to_np_array
 
 _CUDA_AVAILABLE = torch.cuda.is_available()
 
@@ -138,6 +138,37 @@ def test_wav_bytes_to_np_array_normalizes(channels: int, rate: int) -> None:
     assert audio.flags["C_CONTIGUOUS"]
     assert abs(audio.size - TARGET_RATE) <= 1  # resampled to ~1 s at 16 kHz
     assert audio.max() <= 1.0 and audio.min() >= -1.0
+
+
+def test_rms_of_silence_is_zero() -> None:
+    """Digital silence (and an empty array) must have zero RMS."""
+    assert _rms(np.zeros(16000, dtype=np.float32)) == 0.0
+    assert _rms(np.array([], dtype=np.float32)) == 0.0
+
+
+def test_rms_of_full_scale_square_wave_is_one() -> None:
+    """A full-scale ±1 signal has unit RMS; a quiet signal stays below a gate."""
+    square = np.tile([1.0, -1.0], 8000).astype(np.float32)
+    assert _rms(square) == pytest.approx(1.0)
+    assert _rms(np.full(16000, 0.001, dtype=np.float32)) < 0.01
+
+
+def test_is_no_speech_gate() -> None:
+    """The no-speech gate fires only above threshold and stays off when disabled."""
+    tensorrt = pytest.importorskip("tensorrt")  # noqa: F841  # model.py needs TRT
+    from whisper_trt.model import WhisperTRT
+
+    class _Tok:
+        no_speech = 2
+
+    # Logits over a tiny vocab; index 2 is the <|nospeech|> token.
+    high = torch.tensor([[[0.0, 0.0, 10.0, 0.0]]])  # softmax ~0.9995 on no_speech
+    low = torch.tensor([[[10.0, 0.0, 0.0, 0.0]]])  # near-zero on no_speech
+
+    gate = WhisperTRT._is_no_speech
+    assert gate(None, _Tok(), high, 0.6) is True
+    assert gate(None, _Tok(), low, 0.6) is False
+    assert gate(None, _Tok(), high, None) is False  # disabled
 
 
 @pytest.mark.asyncio
