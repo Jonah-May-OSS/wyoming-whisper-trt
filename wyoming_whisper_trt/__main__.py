@@ -10,6 +10,7 @@ This script initializes the Whisper TRT model, sets up the server, and handles c
 import argparse
 import asyncio
 import logging
+import math
 import os
 import sys
 import time
@@ -371,6 +372,29 @@ def _parse_args() -> argparse.Namespace:
 async def main() -> None:
     """Main entry point."""
     args = _parse_args()
+
+    # Validate no-speech-threshold
+    if math.isnan(args.no_speech_threshold):
+        logger.error("Invalid --no-speech-threshold: NaN is not allowed.")
+        sys.exit(1)
+    if args.no_speech_threshold < 0.0:
+        logger.error(
+            "Invalid --no-speech-threshold value: %f. Must be non-negative "
+            "(values > 1.0 disable the feature).",
+            args.no_speech_threshold,
+        )
+        sys.exit(1)
+
+    # Validate silence-threshold
+    if math.isnan(args.silence_threshold):
+        logger.error("Invalid --silence-threshold: NaN is not allowed.")
+        sys.exit(1)
+    if not (0.0 <= args.silence_threshold <= 1.0):
+        logger.error(
+            "Invalid --silence-threshold value: %f. Must be in range [0.0, 1.0].",
+            args.silence_threshold,
+        )
+        sys.exit(1)
 
     # Validate max-workspace-mb (None means "auto", resolved below)
     if args.max_workspace_mb is not None and args.max_workspace_mb <= 0:

@@ -83,16 +83,28 @@ def _rms(audio: np.ndarray) -> float:
 
 @dataclass
 class HandlerSettings:
-    """Runtime settings for the event handler."""
+    """Runtime settings for the event handler.
+
+    Attributes:
+        initial_prompt: Optional text to provide as context for the first
+            transcription window. None means no initial prompt is provided.
+        streaming: If True, emit intermediate transcription chunks in addition
+            to the final text. Defaults to False.
+        default_language: Default language code for transcription (e.g., "en",
+            "es") or None for automatic language detection. Defaults to None.
+        no_speech_threshold: Probability threshold (0.0-1.0) for suppressing
+            Whisper's silence hallucinations (e.g. "www.mooji.org"). Drops a
+            window whose ``<|nospeech|>`` probability meets or exceeds this
+            threshold. None disables this feature. Defaults to 0.6.
+        silence_rms_threshold: RMS energy threshold for the hard silence gate.
+            Audio quieter than this normalized ([-1, 1]) root-mean-square value
+            is short-circuited before reaching the model, emitting empty text.
+            0.0 disables this feature. Defaults to 0.0.
+    """
 
     initial_prompt: str | None = None
     streaming: bool = False
     default_language: str | None = None
-    # Suppress Whisper's silence hallucinations (e.g. "www.mooji.org"). The
-    # no-speech gate drops a window whose ``<|nospeech|>`` probability meets
-    # this threshold; ``None`` disables it. The RMS gate short-circuits audio
-    # quieter than this normalized ([-1, 1]) root-mean-square before it ever
-    # reaches the model; ``0.0`` disables it.
     no_speech_threshold: float | None = 0.6
     silence_rms_threshold: float = 0.0
 

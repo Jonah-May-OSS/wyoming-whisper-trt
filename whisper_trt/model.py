@@ -580,6 +580,24 @@ class WhisperTRT(nn.Module):
         When ``no_speech_threshold`` is set, a window the model judges to be
         non-speech (``<|nospeech|>`` probability at or above the threshold)
         returns empty text instead of a hallucinated transcript.
+
+        Args:
+            audio: Path to an audio file or numpy array containing audio data.
+            language: Language code for transcription (e.g., "en", "es") or
+                "auto" for automatic language detection. Defaults to "auto".
+            stream: If True, return intermediate transcription chunks in addition
+                to the final text. Defaults to False.
+            initial_prompt: Optional text to provide as context for the first
+                transcription window, which can improve accuracy. Defaults to None.
+            no_speech_threshold: Probability threshold (0.0-1.0) for suppressing
+                non-speech segments. Windows with ``<|nospeech|>`` probability at
+                or above this value return empty text. None disables this feature.
+                Defaults to None.
+
+        Returns:
+            A dictionary containing the transcription result with a "text" key
+            holding the final transcript. If stream=True, also includes a "chunks"
+            key with a list of intermediate transcription segments.
         """
         start_time = time.perf_counter()
         audio_array = self._normalize_audio_input(audio)
