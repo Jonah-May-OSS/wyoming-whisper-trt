@@ -369,11 +369,9 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-async def main() -> None:
-    """Main entry point."""
-    args = _parse_args()
-
-    # Validate no-speech-threshold
+def _validate_args(args: argparse.Namespace) -> None:
+    """Validate numeric CLI arguments, exiting with an error on bad values."""
+    # no-speech-threshold: non-negative (values > 1.0 disable the gate)
     if math.isnan(args.no_speech_threshold):
         logger.error("Invalid --no-speech-threshold: NaN is not allowed.")
         sys.exit(1)
@@ -385,24 +383,30 @@ async def main() -> None:
         )
         sys.exit(1)
 
-    # Validate silence-threshold
+    # silence-threshold: a normalized RMS in [0.0, 1.0]
     if math.isnan(args.silence_threshold):
         logger.error("Invalid --silence-threshold: NaN is not allowed.")
         sys.exit(1)
-    if not (0.0 <= args.silence_threshold <= 1.0):
+    if not 0.0 <= args.silence_threshold <= 1.0:
         logger.error(
             "Invalid --silence-threshold value: %f. Must be in range [0.0, 1.0].",
             args.silence_threshold,
         )
         sys.exit(1)
 
-    # Validate max-workspace-mb (None means "auto", resolved below)
+    # max-workspace-mb (None means "auto", resolved later)
     if args.max_workspace_mb is not None and args.max_workspace_mb <= 0:
         logger.error(
             "Invalid --max-workspace-mb value: %d. Must be a positive integer.",
             args.max_workspace_mb,
         )
         sys.exit(1)
+
+
+async def main() -> None:
+    """Main entry point."""
+    args = _parse_args()
+    _validate_args(args)
 
     # Setup logging
     setup_logging(args.debug, args.log_format)
