@@ -6,4 +6,4 @@ mypy==2.1.0
 pyright==1.1.410
 pytest==9.1.1
 pytest-asyncio==1.4.0
-ruff==0.15.18
+ruff==0.15.22
