@@ -55,14 +55,11 @@ jobs:
         with:
           python-version: '3.13'  # Use a stable version
 
-      # Install CUDA Toolkit. The GPU driver comes from the runner's nvidia
-      # runtime; the toolkit installer is cached both in GitHub cache and the
-      # persistent runner tool cache, so runs after the first are fast.
-      - name: Install CUDA Toolkit
-        uses: Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76
-        with:
-          use-github-cache: true
-          use-local-cache: true
+      # No CUDA toolkit install: every dependency is a prebuilt wheel (torch,
+      # tensorrt-cu13, onnx, ...) and torch2trt installs via plain setup.py
+      # (pure Python, no nvcc). CUDA runtime comes from the wheels + the
+      # self-hosted runner's nvidia runtime. Installing the toolkit per run
+      # wrote ~4GB to local disk and contributed to a cluster etcd incident.
 
       # 6. Create and activate virtual environment
       - name: Setup Virtual Environment
