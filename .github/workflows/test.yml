@@ -70,18 +70,13 @@ jobs:
           pip install virtualenv
 
       # 5. Install CUDA Toolkit
-      - name: Install Nvidia Drivers
-        shell: bash
-        run: |
-          wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
-          sudo dpkg -i cuda-keyring_1.1-1_all.deb
-          sudo apt-get update
-          sudo apt-get install -y nvidia-open
-      
+      # NOTE: the GPU driver is provided by the self-hosted runner's nvidia
+      # runtime (nvidia-smi already works), so no in-job driver install is
+      # needed. Cache the toolkit to avoid re-downloading it every run.
       - name: Install CUDA Toolkit
         uses: Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76
         with:
-          use-github-cache: false
+          use-github-cache: true
 
       # 6. Create and activate virtual environment
       - name: Setup Virtual Environment
@@ -172,18 +167,3 @@ jobs:
           name: server-logs
           path: server.log
         if: always()  # This ensures the step runs even if previous steps fail
-        
-      # 9. CUDA driver/library mismatch auto-fix (only on failure)
-      - name: CUDA Driver/Library Mismatch Auto-Fix
-        if: ${{ failure() }}
-        shell: bash
-        run: |
-          echo "Scanning server.log for NVML initialization failure..."
-          if grep -Fq "Failed to initialize NVML: Driver/library version mismatch" server.log; then
-            echo "CUDA driver/library version mismatch detected—upgrading system and rebooting."
-            sudo apt update
-            sudo apt upgrade -y
-            sudo reboot
-          else
-            echo "No NVML mismatch found; skipping auto-fix."
-          fi
