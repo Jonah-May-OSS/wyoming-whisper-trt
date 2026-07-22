@@ -45,38 +45,24 @@ jobs:
         with:
           submodules: recursive
 
-      # 2. Install GCC and G++
-      - name: Install GCC and G++
-        shell: bash
-        run: |
-          sudo apt update
-          sudo apt install -y gcc g++
+      # gcc/g++, netcat-openbsd and virtualenv are baked into the custom runner
+      # image (local/gpu-runner), so no in-job apt/pip installs are needed.
 
-      # 3. Install Netcat (nc) for listening checks
-      - name: Install Netcat
-        shell: bash
-        run: |
-          sudo apt-get install -y netcat-openbsd
-
-      # 4. Setup Python environment
+      # Setup Python. RUNNER_TOOL_CACHE points at the persistent NFS cache on
+      # the runner, so 3.13 is downloaded once and restored instantly after.
       - name: Setup Python
         uses: actions/setup-python@28f2168f4d98ee0445e3c6321f6e6616c83dd5ec
         with:
           python-version: '3.13'  # Use a stable version
 
-      - name: Install Python venv
-        shell: bash
-        run: |
-          pip install virtualenv
-
-      # 5. Install CUDA Toolkit
-      # NOTE: the GPU driver is provided by the self-hosted runner's nvidia
-      # runtime (nvidia-smi already works), so no in-job driver install is
-      # needed. Cache the toolkit to avoid re-downloading it every run.
+      # Install CUDA Toolkit. The GPU driver comes from the runner's nvidia
+      # runtime; the toolkit installer is cached both in GitHub cache and the
+      # persistent runner tool cache, so runs after the first are fast.
       - name: Install CUDA Toolkit
         uses: Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76
         with:
           use-github-cache: true
+          use-local-cache: true
 
       # 6. Create and activate virtual environment
       - name: Setup Virtual Environment
@@ -95,9 +81,18 @@ jobs:
           # Define server URI for testing
           TEST_URI="tcp://127.0.0.1:8080"
 
-          # Define data and download directories
-          DATA_DIR="./data"
-          DOWNLOAD_DIR="./download"
+          # Data (built TRT engine) and model download dirs. Point them at the
+          # persistent runner cache when available so the expensive TRT engine
+          # build + model download are reused across runs; fall back to local
+          # dirs on runners without the cache mount.
+          if [ -n "$RUNNER_CACHE" ]; then
+            DATA_DIR="$RUNNER_CACHE/whisper/data"
+            DOWNLOAD_DIR="$RUNNER_CACHE/whisper/download"
+          else
+            DATA_DIR="./data"
+            DOWNLOAD_DIR="./download"
+          fi
+          echo "Using DATA_DIR=$DATA_DIR DOWNLOAD_DIR=$DOWNLOAD_DIR"
 
           # Create necessary directories
           mkdir -p $DATA_DIR
