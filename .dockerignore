@@ -1,0 +1,16 @@
+# Keep the build context (and image COPY) lean. script/setup needs the source
+# packages (whisper_trt/, wyoming_whisper_trt/, script/, requirements.txt) and
+# the torch2trt submodule, so those are NOT excluded.
+.git
+.github
+.venv
+**/.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.mypy_cache
+*.egg-info
+tests
+examples
+*.md
