@@ -20,19 +20,15 @@ jobs:
     name: "Wait for required checks"
     runs-on: ubuntu-latest
     steps:
-      - name: Wait for Ruff checks
-        uses: fountainhead/action-wait-for-check@5a908a24814494009c4bb27c242ea38c93c593be
-        id: wait-for-checks
+      # wait-on-check-action-ts self-fails if the check's conclusion is not in
+      # allowed-conclusions, so no separate "fail if" gate step is needed.
+      - name: Wait for Ruff check
+        uses: matiasalbarello/wait-on-check-action-ts@8087812521cdb59ebc7751984b31b17209b30eeb # v1.2.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          checkName: ruff
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          timeoutSeconds: 600
-          intervalSeconds: 10
-      
-      - name: Fail if checks did not succeed
-        if: steps.wait-for-checks.outputs.conclusion != 'success'
-        run: exit 1
+          check-name: ruff
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 10
 
   test_linux:
     name: "Build and Test on Linux (self-hosted runner)"
