@@ -61,6 +61,22 @@ NOTE: Only the official OpenAI models from HuggingFace are currently supported. 
 - base.en
 - small.en
 
+### Limitations
+
+**Single 30 s window.** Whisper's encoder operates on a fixed 30-second
+window, and WhisperTRT transcribes exactly one window per request: audio
+longer than 30 s is truncated to the first 30 s (there is no sliding-window
+chunking). This is well-suited to the short utterances Home Assistant sends,
+but it is not a general long-form transcription backend.
+
+**`LANGUAGE=auto` is effectively English.** Upstream `whisper.transcribe`
+runs a dedicated language-detection pass and prepends the detected `<|lang|>`
+token to the decoder prompt. WhisperTRT does not run that pass — in `auto`
+mode no language token is injected, so decoding is unsteered and strongly
+biased toward English. For reliable non-English transcription, set `LANGUAGE`
+explicitly (e.g. `LANGUAGE=es`) rather than relying on `auto`. English-only
+models (`*.en`) always transcribe English regardless of this setting.
+
 ### Pre-requisites:
 1. Install and configure Docker
 2. Install and configure the [Nvidia Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
