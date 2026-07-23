@@ -58,6 +58,18 @@ jobs:
                 print('tensorrt', tensorrt.__version__); \
                 print('whisper_trt', whisper_trt.__version__)"
 
+      - name: TLS trust smoke test (catches a missing CA bundle, no GPU needed)
+        run: |
+          docker run --rm \
+            --entrypoint /usr/src/wyoming-whisper-trt/.venv/bin/python \
+            wyoming-whisper-trt:build-check \
+            -c "import urllib.request, urllib.error
+          try:
+              urllib.request.urlopen('https://openaipublic.azureedge.net/', timeout=20)
+          except urllib.error.HTTPError:
+              pass  # any HTTP status means the TLS handshake + CA verify worked
+          print('TLS trust OK (model download host reachable + verified)')"
+
       - name: Report image size
         run: |
           docker images wyoming-whisper-trt:build-check --format '{{.Size}}'

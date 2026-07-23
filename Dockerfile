@@ -33,11 +33,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # ===========================================================================
 # Runtime stage: slim Ubuntu (matches the NGC base's Ubuntu 24.04 / glibc /
-# python3.12, so the --copies venv relocates cleanly). Only the Python stdlib,
-# ffmpeg (audio loading) and libgomp (torch OpenMP) are needed on top of the
-# venv; libcuda.so and nvidia-smi are injected by the NVIDIA container runtime.
-# This drops the ~3.8 GB CUDA devel toolkit and the build toolchain, which the
-# self-contained venv makes redundant at runtime.
+# python3.12, so the --copies venv relocates cleanly). On top of the venv we
+# need: the Python stdlib, ffmpeg (audio loading), libgomp (torch OpenMP), and
+# ca-certificates (TLS trust store — the model is downloaded over HTTPS on
+# first run; without it that fetch fails with CERTIFICATE_VERIFY_FAILED —
+# unlike the NGC base, plain ubuntu ships no CA bundle). libcuda.so and
+# nvidia-smi are injected by the NVIDIA container runtime. This drops the
+# ~3.8 GB CUDA devel toolkit and the build toolchain from the image.
 # ===========================================================================
 FROM ubuntu:24.04 AS runtime
 
@@ -46,6 +48,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3.12 \
         ffmpeg \
         libgomp1 \
+        ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Make the GPU visible when the caller doesn't set these (the NVIDIA runtime
