@@ -392,11 +392,19 @@ class WhisperTRT(nn.Module):
 
         if initial_prompt:
             prompt_ids = tokenizer.encode(initial_prompt)
-            out_tokens[0, cur_len : cur_len + len(prompt_ids)] = torch.tensor(
-                prompt_ids,
-                device=audio_features.device,
-            )
-            cur_len += len(prompt_ids)
+            # Cap the prompt to at most half the remaining buffer so there is
+            # always room to decode, and keep the most recent tokens (Whisper's
+            # convention). Without this an over-long prompt overflows out_tokens
+            # and raises an opaque index error.
+            max_prompt = max(0, (max_len - cur_len) // 2)
+            if len(prompt_ids) > max_prompt:
+                prompt_ids = prompt_ids[-max_prompt:] if max_prompt else []
+            if prompt_ids:
+                out_tokens[0, cur_len : cur_len + len(prompt_ids)] = torch.tensor(
+                    prompt_ids,
+                    device=audio_features.device,
+                )
+                cur_len += len(prompt_ids)
 
         return out_tokens, cur_len, cur_len
 

@@ -260,9 +260,14 @@ class WhisperTrtEventHandler(AsyncEventHandler):
             logger.debug("➡️ Emitting final Transcript: %r", final_text)
         except (RuntimeError, OSError, ValueError) as err:
             logger.error("Transcription failed: %s", err, exc_info=True)
+            # Signal failure via an Error event and emit an EMPTY transcript,
+            # rather than sending the error text as recognized speech (Home
+            # Assistant would otherwise treat "Transcription failed: ..." as a
+            # spoken command and act on / read it back).
             await self.write_event(
-                Transcript(text=f"Transcription failed: {str(err)[:100]}").event()
+                Error(text=str(err), code=err.__class__.__name__).event()
             )
+            await self._emit_transcript("")
             self._wav_buffer = io.BytesIO()
             return
 
