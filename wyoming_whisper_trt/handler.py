@@ -121,6 +121,10 @@ class HandlerContext:
 class WhisperTrtEventHandler(AsyncEventHandler):
     """Event handler for clients utilizing the Whisper TRT model."""
 
+    # Holds per-connection state (buffers, language, per-connection prompt);
+    # 8 attributes is intentional for a stateful protocol handler.
+    # pylint: disable=too-many-instance-attributes
+
     def __init__(
         self,
         reader: asyncio.StreamReader,
@@ -138,6 +142,10 @@ class WhisperTrtEventHandler(AsyncEventHandler):
         self.model_lock = context.model_lock
         self._settings = settings
         self._language = settings.default_language
+        # Per-connection copy: the initial prompt is consumed once on the first
+        # utterance of THIS connection. Mutating the shared settings object
+        # instead would consume it once for the whole server's lifetime.
+        self._initial_prompt = settings.initial_prompt
 
         # WAV buffer
 
@@ -213,11 +221,11 @@ class WhisperTrtEventHandler(AsyncEventHandler):
         finally:
             self._wave_writer = None
 
-        # prepare initial prompt
+        # prepare initial prompt (per-connection; consumed on first utterance)
 
-        prompt = self._settings.initial_prompt
+        prompt = self._initial_prompt
         if prompt is not None:
-            self._settings.initial_prompt = None
+            self._initial_prompt = None
 
         # transcribe full audio
 
