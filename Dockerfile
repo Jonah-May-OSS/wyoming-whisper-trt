@@ -21,7 +21,11 @@ COPY . /usr/src/wyoming-whisper-trt
 # CUDA/cuDNN wheels and tensorrt is a pip wheel, so the resulting venv is
 # self-contained w.r.t. CUDA/TensorRT — nothing links back to the base's
 # /usr/local/cuda toolkit at runtime.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Make apt resilient to a stalled mirror connection: without a timeout apt can
+# hang indefinitely on a half-open fetch (observed wedging a multi-hour build);
+# retries + a 30s timeout make it fail fast and recover instead.
+RUN printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' > /etc/apt/apt.conf.d/99network-resilience \
+    && apt-get update && apt-get install -y --no-install-recommends \
         python3-venv \
         git \
     && chmod +x ./script/setup \
@@ -43,7 +47,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ===========================================================================
 FROM ubuntu:24.04 AS runtime
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' > /etc/apt/apt.conf.d/99network-resilience \
+    && apt-get update && apt-get install -y --no-install-recommends \
         python3 \
         python3.12 \
         ffmpeg \
