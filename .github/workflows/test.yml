@@ -92,8 +92,16 @@ jobs:
           # persistent runner cache when available so the expensive TRT engine
           # build + model download are reused across runs; fall back to local
           # dirs on runners without the cache mount.
+          #
+          # TRT engine plans are GPU-architecture specific, and the runner pool
+          # has mixed GPUs (e.g. sm_89 RTX 4070 Ti and sm_86 RTX 3050). Key the
+          # engine cache (--data-dir) by compute capability so a plan built on
+          # one arch is never deserialized on another (TRT "incompatible device"
+          # error 6). The download-dir holds arch-independent model weights and
+          # stays shared.
           if [ -n "$RUNNER_CACHE" ]; then
-            DATA_DIR="$RUNNER_CACHE/whisper/data"
+            CC="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -cd '0-9')"
+            DATA_DIR="$RUNNER_CACHE/whisper/data-sm${CC:-unknown}"
             DOWNLOAD_DIR="$RUNNER_CACHE/whisper/download"
           else
             DATA_DIR="./data"
