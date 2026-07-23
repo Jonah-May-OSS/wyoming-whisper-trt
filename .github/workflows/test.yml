@@ -20,19 +20,15 @@ jobs:
     name: "Wait for required checks"
     runs-on: ubuntu-latest
     steps:
-      - name: Wait for Ruff checks
-        uses: fountainhead/action-wait-for-check@5a908a24814494009c4bb27c242ea38c93c593be
-        id: wait-for-checks
+      # wait-on-check-action-ts self-fails if the check's conclusion is not in
+      # allowed-conclusions, so no separate "fail if" gate step is needed.
+      - name: Wait for Ruff check
+        uses: matiasalbarello/wait-on-check-action-ts@8087812521cdb59ebc7751984b31b17209b30eeb # v1.2.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          checkName: ruff
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          timeoutSeconds: 600
-          intervalSeconds: 10
-      
-      - name: Fail if checks did not succeed
-        if: steps.wait-for-checks.outputs.conclusion != 'success'
-        run: exit 1
+          check-name: ruff
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 10
 
   test_linux:
     name: "Build and Test on Linux (self-hosted runner)"
@@ -55,14 +51,11 @@ jobs:
         with:
           python-version: '3.13'  # Use a stable version
 
-      # Install CUDA Toolkit. The GPU driver comes from the runner's nvidia
-      # runtime; the toolkit installer is cached both in GitHub cache and the
-      # persistent runner tool cache, so runs after the first are fast.
-      - name: Install CUDA Toolkit
-        uses: Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76
-        with:
-          use-github-cache: true
-          use-local-cache: true
+      # No CUDA toolkit install: every dependency is a prebuilt wheel (torch,
+      # tensorrt-cu13, onnx, ...) and torch2trt installs via plain setup.py
+      # (pure Python, no nvcc). CUDA runtime comes from the wheels + the
+      # self-hosted runner's nvidia runtime. Installing the toolkit per run
+      # wrote ~4GB to local disk and contributed to a cluster etcd incident.
 
       # 6. Create and activate virtual environment
       - name: Setup Virtual Environment
