@@ -59,4 +59,5 @@ jobs:
                 print('whisper_trt', whisper_trt.__version__)"
 
       - name: Report image size
-        run: docker images wyoming-whisper-trt:build-check --format 'image size: {{.Size}}'
+        run: |
+          docker images wyoming-whisper-trt:build-check --format '{{.Size}}'
