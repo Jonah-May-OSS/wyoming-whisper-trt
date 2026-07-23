@@ -106,15 +106,20 @@ jobs:
           mkdir -p $DOWNLOAD_DIR
 
           # Start the server in the background, redirecting output to server.log
+          # CI smoke test only needs to prove the server loads a model, builds
+          # its TRT engine, and listens. Use base.en (English-only, ~74M): far
+          # less VRAM/RAM and a much faster engine build than medium (~769M),
+          # which was OOMing against the runner memory limit. --language en
+          # matches the English-only model (auto detection doesn't apply).
           nohup python -m wyoming_whisper_trt.__main__ \
-            --model medium \
+            --model base.en \
             --uri $TEST_URI \
             --data-dir $DATA_DIR \
             --download-dir $DOWNLOAD_DIR \
             --device cuda \
             --compute-type float16 \
             --beam-size 5 \
-            --language auto \
+            --language en \
             > server.log 2>&1 &
         
           # Capture the server's Process ID (PID)
