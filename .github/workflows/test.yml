@@ -60,7 +60,12 @@ jobs:
       - name: Install CUDA Toolkit
         uses: Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76
         with:
-          use-github-cache: true
+          # GitHub Actions cache is scoped per-branch, so on a self-hosted runner
+          # it misses on nearly every PR and re-downloads the ~4GB installer over
+          # the network. Disable it and rely only on the local tool cache, which
+          # lives on the runner's persistent NFS RUNNER_TOOL_CACHE and always hits
+          # after the first install.
+          use-github-cache: false
           use-local-cache: true
 
       # 6. Create and activate virtual environment (torch2trt compiles here)
