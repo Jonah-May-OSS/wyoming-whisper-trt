@@ -526,8 +526,12 @@ class WhisperTRT(nn.Module):
         load_start = time.perf_counter()
         # Compute the mel on the GPU directly: avoids the CPU STFT plus a
         # full-spectrogram host->device copy (only the raw audio crosses).
+        # Pass n_mels explicitly: large-v3 / large-v3-turbo use 128-mel
+        # features (dims.n_mels) and the encoder engine is built for that;
+        # omitting it defaults to 80 and feeds those engines the wrong shape.
         mel = whisper.audio.log_mel_spectrogram(
             audio_array,
+            self.dims.n_mels,
             padding=whisper.audio.N_SAMPLES,
             device="cuda",
         )[None, ...]
