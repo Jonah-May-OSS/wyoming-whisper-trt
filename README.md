@@ -77,6 +77,29 @@ biased toward English. For reliable non-English transcription, set `LANGUAGE`
 explicitly (e.g. `LANGUAGE=es`) rather than relying on `auto`. English-only
 models (`*.en`) always transcribe English regardless of this setting.
 
+### Low-resource / edge tuning
+
+On memory- or compute-constrained devices (e.g. Jetson Orin Nano) a few knobs
+trade accuracy for a smaller/faster footprint. All are set via the container
+environment:
+
+- **`MODEL=tiny.en`** — the smallest English model. Substantially faster and
+  lower VRAM than `base.en`, at some WER cost. For the short, limited-vocabulary
+  utterances Home Assistant sends this is often more than adequate; use a larger
+  model only if you see it mis-hearing commands.
+- **`DECODER_MODE=simple`** — the single-engine decoder. Measured (`base`, RTX
+  3050) at **834 MiB vs 1032 MiB** for the default `kv` mode — ~200 MiB less
+  VRAM — for ~14% higher latency. A good trade on tight-VRAM devices. See
+  [Decoder modes](#decoder-modes---decoder-mode-env-decoder_mode).
+- **`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`** — an optional, low-risk
+  allocator setting that can reduce reserved-but-unused VRAM from
+  fragmentation. Effect on a steady inference workload is modest, but it costs
+  nothing to enable on a constrained device.
+
+Most of the runtime footprint is the fixed CUDA/cuDNN context rather than the
+model weights (the TensorRT engines for `base` total only tens of MiB), so
+model choice and decoder mode are the levers that actually move VRAM.
+
 ### Pre-requisites:
 1. Install and configure Docker
 2. Install and configure the [Nvidia Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
