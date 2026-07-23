@@ -266,12 +266,6 @@ def _parse_args() -> argparse.Namespace:
         help="Directory to download models into (default: first data dir)",
     )
     parser.add_argument(
-        "--device",
-        default="cuda",
-        choices=["cuda", "cpu"],
-        help="Device to use for inference (default: cuda)",
-    )
-    parser.add_argument(
         "--compute-type",
         default="float16",
         choices=["float32", "float16", "int8"],
@@ -292,12 +286,6 @@ def _parse_args() -> argparse.Namespace:
             "that together cost ~600 MiB more VRAM. 'simple' is the original "
             "single-engine decoder: lower VRAM, slower decode. See README."
         ),
-    )
-    parser.add_argument(
-        "--beam-size",
-        type=int,
-        default=5,
-        help="Beam size for decoding (default: 5)",
     )
     parser.add_argument(
         "--max-workspace-mb",
