@@ -28,6 +28,10 @@ jobs:
     steps:
       - name: Check out the repo
         uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
+        with:
+          # torch2trt is a submodule; the image now COPYs local source, so it
+          # must be present in the build context.
+          submodules: recursive
 
       # GPU driver (nvidia runtime), Docker (dind sidecar) are provided by the
       # self-hosted ARC runner; building the image doesn't need host CUDA/nvcc
