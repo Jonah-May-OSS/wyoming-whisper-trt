@@ -51,15 +51,24 @@ jobs:
         with:
           python-version: '3.13'  # Use a stable version
 
-      # No CUDA toolkit install: every dependency is a prebuilt wheel (torch,
-      # tensorrt-cu13, onnx, ...) and torch2trt installs via plain setup.py
-      # (pure Python, no nvcc). CUDA runtime comes from the wheels + the
-      # self-hosted runner's nvidia runtime. Installing the toolkit per run
-      # wrote ~4GB to local disk and contributed to a cluster etcd incident.
+      # CUDA toolkit IS required here: torch2trt/setup.py builds a CUDAExtension
+      # ('plugins') via nvcc, which needs CUDA_HOME. (glados can drop it because
+      # it uses the torch-tensorrt wheel; whisper compiles torch2trt.) The GPU
+      # driver comes from the runner's nvidia runtime; the installer is cached
+      # in GitHub cache + the persistent runner tool cache. CUDA_HOME is set
+      # explicitly so torch's cpp_extension finds it.
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76
+        with:
+          use-github-cache: true
+          use-local-cache: true
 
-      # 6. Create and activate virtual environment
+      # 6. Create and activate virtual environment (torch2trt compiles here)
       - name: Setup Virtual Environment
         shell: bash
+        env:
+          # Jimver exports CUDA_PATH; torch2trt's CUDAExtension needs CUDA_HOME.
+          CUDA_HOME: ${{ env.CUDA_PATH }}
         run: |
           chmod +x script/setup
           ./script/setup
