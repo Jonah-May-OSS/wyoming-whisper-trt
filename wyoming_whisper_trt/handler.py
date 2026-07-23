@@ -121,6 +121,10 @@ class HandlerContext:
 class WhisperTrtEventHandler(AsyncEventHandler):
     """Event handler for clients utilizing the Whisper TRT model."""
 
+    # Holds per-connection state (buffers, language, per-connection prompt);
+    # 8 attributes is intentional for a stateful protocol handler.
+    # pylint: disable=too-many-instance-attributes
+
     def __init__(
         self,
         reader: asyncio.StreamReader,
