@@ -10,6 +10,7 @@ This script initializes the Whisper TRT model, sets up the server, and handles c
 import argparse
 import asyncio
 import logging
+import math
 import os
 import sys
 import time
@@ -322,6 +323,27 @@ def _parse_args() -> argparse.Namespace:
         help="Enable partial transcription streaming",
     )
     parser.add_argument(
+        "--no-speech-threshold",
+        type=float,
+        default=0.6,
+        help=(
+            "Suppress silence hallucinations (e.g. 'www.mooji.org'): drop a "
+            "window whose '<|nospeech|>' probability is at or above this value "
+            "(0.0-1.0). Set to a value > 1 to disable. Default: 0.6."
+        ),
+    )
+    parser.add_argument(
+        "--silence-threshold",
+        type=float,
+        default=0.0,
+        help=(
+            "Optional hard energy gate: skip transcription for audio whose "
+            "normalized ([-1, 1]) RMS is below this value, emitting an empty "
+            "transcript. 0.0 (default) disables it; the no-speech gate is the "
+            "accurate check."
+        ),
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable DEBUG level logging",
@@ -347,17 +369,44 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-async def main() -> None:
-    """Main entry point."""
-    args = _parse_args()
+def _validate_args(args: argparse.Namespace) -> None:
+    """Validate numeric CLI arguments, exiting with an error on bad values."""
+    # no-speech-threshold: non-negative (values > 1.0 disable the gate)
+    if math.isnan(args.no_speech_threshold):
+        logger.error("Invalid --no-speech-threshold: NaN is not allowed.")
+        sys.exit(1)
+    if args.no_speech_threshold < 0.0:
+        logger.error(
+            "Invalid --no-speech-threshold value: %f. Must be non-negative "
+            "(values > 1.0 disable the feature).",
+            args.no_speech_threshold,
+        )
+        sys.exit(1)
 
-    # Validate max-workspace-mb (None means "auto", resolved below)
+    # silence-threshold: a normalized RMS in [0.0, 1.0]
+    if math.isnan(args.silence_threshold):
+        logger.error("Invalid --silence-threshold: NaN is not allowed.")
+        sys.exit(1)
+    if not 0.0 <= args.silence_threshold <= 1.0:
+        logger.error(
+            "Invalid --silence-threshold value: %f. Must be in range [0.0, 1.0].",
+            args.silence_threshold,
+        )
+        sys.exit(1)
+
+    # max-workspace-mb (None means "auto", resolved later)
     if args.max_workspace_mb is not None and args.max_workspace_mb <= 0:
         logger.error(
             "Invalid --max-workspace-mb value: %d. Must be a positive integer.",
             args.max_workspace_mb,
         )
         sys.exit(1)
+
+
+async def main() -> None:
+    """Main entry point."""
+    args = _parse_args()
+    _validate_args(args)
 
     # Setup logging
     setup_logging(args.debug, args.log_format)
@@ -445,6 +494,8 @@ async def main() -> None:
             initial_prompt=args.initial_prompt,
             streaming=args.streaming,
             default_language=args.language,
+            no_speech_threshold=args.no_speech_threshold,
+            silence_rms_threshold=args.silence_threshold,
         ),
     )
 

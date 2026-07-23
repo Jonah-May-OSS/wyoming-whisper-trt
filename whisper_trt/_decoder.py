@@ -37,6 +37,10 @@ class DecodeRequest:
     max_len: int
     audio_features: Tensor
     stream: bool
+    # When set, decode returns empty text if the probability of the
+    # ``<|nospeech|>`` token at the first decode position meets this threshold.
+    # ``None`` disables the check. See ``WhisperTRT._is_no_speech``.
+    no_speech_threshold: float | None = None
 
 
 @dataclass
