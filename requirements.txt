@@ -7,4 +7,4 @@ tensorrt~=10.16.1.11
 onnx~=1.22.0
 onnxscript~=0.7.0
 onnx-graphsurgeon==0.6.1
-torch==2.12.1
+torch==2.13.0
