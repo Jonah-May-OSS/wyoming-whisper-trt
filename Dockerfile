@@ -45,7 +45,7 @@ RUN printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https:
 # nvidia-smi are injected by the NVIDIA container runtime. This drops the
 # ~3.8 GB CUDA devel toolkit and the build toolchain from the image.
 # ===========================================================================
-FROM ubuntu:24.04 AS runtime
+FROM ubuntu:26.04 AS runtime
 
 RUN printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' > /etc/apt/apt.conf.d/99network-resilience \
     && apt-get update && apt-get install -y --no-install-recommends \
