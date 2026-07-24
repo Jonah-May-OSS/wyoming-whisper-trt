@@ -8,8 +8,11 @@ ARG TORCH_WHEEL_SHA256=6f75fd2d2ef840ede1a90dbcf40a5458214bee26cc803fa510cda2e89
 WORKDIR /usr/src/wyoming-whisper-trt
 COPY . ./
 
-# Update and install python3-venv, clone the repository, and run the setup script
-RUN apt-get update && apt-get install -y \
+# Update and install python3-venv, clone the repository, and run the setup script.
+# Make apt resilient to a stalled mirror connection (no timeout => can hang the
+# build for hours); retries + a 30s timeout make it fail fast and recover.
+RUN printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' > /etc/apt/apt.conf.d/99network-resilience \
+    && apt-get update && apt-get install -y \
     curl gnupg2 ffmpeg git \
     && install -d -m 0755 /usr/share/keyrings \
     && curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/sbsa/3bf863cc.pub \
@@ -19,7 +22,6 @@ RUN apt-get update && apt-get install -y \
     && apt-get update && apt-get install -y \
     python3-venv python3-pip libopenblas-dev \
     libcusparselt0 libcusparselt-dev \
-    && git submodule update --init --recursive \
     && chmod +x ./script/setup \
     && curl -fLo "${TORCH_WHEEL}" "https://developer.download.nvidia.com/compute/redist/jp/v61/pytorch/${TORCH_WHEEL}" \
     && echo "${TORCH_WHEEL_SHA256}  ${TORCH_WHEEL}" | sha256sum -c - \
