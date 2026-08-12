@@ -7,4 +7,9 @@ tensorrt~=10.16.1.11
 onnx~=1.22.0
 onnxscript~=0.7.0
 onnx-graphsurgeon==0.6.1
+# Not imported by this project directly: onnx-graphsurgeon's fold_constants()
+# evaluates constant subgraphs through onnxruntime (CPUExecutionProvider only,
+# so the GPU build would be pure image bloat). Without it every torch2trt
+# conversion logs "No module named 'onnxruntime'" and silently skips folding.
+onnxruntime~=1.28.0
 torch==2.12.1
