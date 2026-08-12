@@ -11,9 +11,7 @@
         "--model", "tiny",
         "--uri", "tcp://0.0.0.0:10300",
         "--data-dir", "./.vscode/data",
-        "--device", "cuda",
         "--compute-type", "float16",
-        "--beam-size", "5",
         "--language", "auto",
         "--debug"
       ],

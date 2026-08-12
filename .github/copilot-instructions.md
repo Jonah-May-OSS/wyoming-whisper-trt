@@ -128,7 +128,7 @@ When assigned a task:
 
 2. **Basic Server Start**:
    ```bash
-   python script/run --model base --uri tcp://127.0.0.1:10300 --data-dir ./data --download-dir ./download --device cuda
+   python script/run --model base --uri tcp://127.0.0.1:10300 --data-dir ./data --download-dir ./download
    ```
    - **NEVER CANCEL**: Initial run takes 30-45 minutes for model download and TensorRT optimization.
    - Set timeout to 60+ minutes for first run.
@@ -172,7 +172,7 @@ These commands help verify the codebase integrity before committing to long buil
 1. **Start Server and Verify Listening**:
    ```bash
    # Terminal 1: Start server
-   python -m wyoming_whisper_trt --model base --uri tcp://127.0.0.1:10300 --data-dir ./data --device cuda
+   python -m wyoming_whisper_trt --model base --uri tcp://127.0.0.1:10300 --data-dir ./data
    
    # Terminal 2: Test connectivity (in separate session)
    nc -z localhost 10300 && echo "Server is listening" || echo "Server not responding"
@@ -340,7 +340,7 @@ If you see `pip._vendor.urllib3.exceptions.ReadTimeoutError: HTTPSConnectionPool
 - **Required**: NVIDIA GPU with CUDA compute capability 7.0+
 - **Required**: NVIDIA Container Toolkit (for Docker)
 - **Required**: CUDA 12.8+ and TensorRT 10.13+
-- **Development**: Can fall back to CPU mode with `--device cpu` but significantly slower
+- **No CPU fallback**: TensorRT engines are GPU-only; a CUDA device is mandatory
 
 ## CI/CD Integration
 
@@ -466,7 +466,7 @@ Always use the provided Docker images for production deployments as they handle 
 **CUDA/GPU Not Detected:**
 - Verify NVIDIA drivers are installed
 - Check NVIDIA Container Toolkit configuration
-- Use `--device cpu` flag for development without GPU
+- A CUDA GPU is required; there is no CPU fallback
 
 **Test Failures:**
 - Ensure all dependencies are installed (`python script/setup --dev`)
