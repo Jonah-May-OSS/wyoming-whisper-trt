@@ -36,6 +36,7 @@ import time
 import wave
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
@@ -1521,7 +1522,10 @@ def load_trt_model(
         if not build:
             raise
         logger.warning("Rebuilding unusable TRT checkpoint at %s: %s", path, err)
-        os.remove(path)  # engine checkpoints are multi-GB; don't keep a dead copy
+        # Engine checkpoints are multi-GB, so drop the dead copy rather than
+        # renaming it aside. missing_ok: another process sharing this cache dir
+        # may have reached the same conclusion and unlinked it first.
+        Path(path).unlink(missing_ok=True)
         builder.build(path, verbose=verbose)
         trt_model = builder.load(path)
 
