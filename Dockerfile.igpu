@@ -12,14 +12,14 @@ COPY . ./
 # Make apt resilient to a stalled mirror connection (no timeout => can hang the
 # build for hours); retries + a 30s timeout make it fail fast and recover.
 RUN printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' > /etc/apt/apt.conf.d/99network-resilience \
-    && apt-get update && apt-get install -y \
+    && apt-get update && apt-get install -y --no-install-recommends \
     curl gnupg2 ffmpeg git \
     && install -d -m 0755 /usr/share/keyrings \
     && curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/sbsa/3bf863cc.pub \
          | gpg --dearmor -o /usr/share/keyrings/nvidia-cuda.gpg \
     && echo "deb [signed-by=/usr/share/keyrings/nvidia-cuda.gpg] https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/sbsa/ /" \
          > /etc/apt/sources.list.d/cuda-sbsa.list \
-    && apt-get update && apt-get install -y \
+    && apt-get update && apt-get install -y --no-install-recommends \
     python3-venv python3-pip libopenblas-dev \
     libcusparselt0 libcusparselt-dev \
     && chmod +x ./script/setup \
