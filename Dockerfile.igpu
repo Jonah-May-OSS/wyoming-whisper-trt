@@ -26,8 +26,15 @@ RUN printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https:
     && curl -fLo "${TORCH_WHEEL}" "https://developer.download.nvidia.com/compute/redist/jp/v61/pytorch/${TORCH_WHEEL}" \
     && echo "${TORCH_WHEEL_SHA256}  ${TORCH_WHEEL}" | sha256sum -c - \
     && pip install --no-cache-dir "./${TORCH_WHEEL}" \
-    && pip install --upgrade pip setuptools wheel "numpy<2" packaging \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    # The downloaded wheel is only needed for the install above; drop it so it
+    # doesn't linger (a few hundred MB) in the final image layer.
+    && rm -f "./${TORCH_WHEEL}" \
+    && pip install --no-cache-dir --upgrade pip setuptools wheel "numpy<2" packaging \
+    # curl/gnupg2/git are build-only (repo key + wheel download + submodule
+    # init already done above); ffmpeg, python3-venv/pip and the runtime CUDA
+    # libs (libopenblas, libcusparselt0) stay for run.sh's first-run setup.
+    && apt-get purge -y curl gnupg2 git && apt-get autoremove -y \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* /root/.cache/pip
 
 WORKDIR /
 COPY ./run.sh ./
