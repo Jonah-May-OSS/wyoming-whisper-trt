@@ -26,9 +26,11 @@ from .cache import get_cache_dir, set_cache_dir
 from .model import (
     LARGE_MODELS,
     MODEL_FILENAMES,
+    IncompatibleEngineError,
     WhisperTRT,
     WhisperTRTBuilder,
     auto_workspace_mb,
+    get_device_arch_tag,
     get_model_filename,
     load_trt_model,
 )
@@ -36,11 +38,13 @@ from .model import (
 __all__ = [
     "LARGE_MODELS",
     "MODEL_FILENAMES",
+    "IncompatibleEngineError",
     "WhisperTRT",
     "WhisperTRTBuilder",
     "__version__",
     "auto_workspace_mb",
     "get_cache_dir",
+    "get_device_arch_tag",
     "get_model_filename",
     "load_trt_model",
     "set_cache_dir",

@@ -85,6 +85,54 @@ def _instantiate_type(class_type: type[Any]) -> Any:
     return class_type()
 
 
+class IncompatibleEngineError(RuntimeError):
+    """Raised when a serialized TRT engine cannot be deserialized here.
+
+    The usual cause is a checkpoint built for a different GPU architecture
+    (TensorRT plans are not portable across compute capabilities), but a
+    truncated or TRT-version-mismatched plan fails the same way.
+    """
+
+
+def get_device_arch_tag() -> str:
+    """Return a cache tag for the CUDA device this process will actually use.
+
+    TensorRT plans are tied to the compute capability they were built on, so
+    the tag becomes part of the engine filename: a plan built on an sm_86 GPU
+    can never be picked up on an sm_89 one, even when both share a cache
+    directory. Derived from the device torch selects rather than from
+    ``nvidia-smi``, whose ordering need not match CUDA's on mixed multi-GPU
+    hosts.
+    """
+    try:
+        if not torch.cuda.is_available():
+            return "smunknown"
+        major, minor = torch.cuda.get_device_capability()
+    except (RuntimeError, AssertionError) as err:  # pragma: no cover - driver dependent
+        logger.debug("Could not query CUDA compute capability: %s", err)
+        return "smunknown"
+    return f"sm{major}{minor}"
+
+
+def _load_engine_module(engine_state: dict[str, Any], what: str) -> Any:
+    """Deserialize one TRT engine from checkpoint state into a TRTModule.
+
+    ``TRTModule._load_from_state_dict`` leaves ``engine`` as ``None`` when
+    ``deserialize_cuda_engine`` fails, which otherwise only surfaces later as
+    an opaque ``AttributeError`` on ``NoneType``. Convert it here into an
+    actionable error the loader can respond to by rebuilding.
+    """
+    module = _new_trt_module().cuda()
+    module.load_state_dict(engine_state)
+    if getattr(module, "engine", None) is None:
+        raise IncompatibleEngineError(
+            f"Failed to deserialize the '{what}' TensorRT engine on this device "
+            f"({get_device_arch_tag()}); the cached plan is incompatible or corrupt "
+            "and must be rebuilt. See the TensorRT log above for the exact cause."
+        )
+    return module
+
+
 def _invoke_converter(
     converter: Callable[..., Any],
     module: nn.Module,
@@ -1178,8 +1226,9 @@ class WhisperTRTBuilder:
         checkpoint: dict[str, Any],
     ) -> AudioEncoderTRT:
         """Construct AudioEncoderTRT from a serialized checkpoint."""
-        audio_encoder_engine = _new_trt_module().cuda()
-        audio_encoder_engine.load_state_dict(checkpoint["audio_encoder_engine"])
+        audio_encoder_engine = _load_engine_module(
+            checkpoint["audio_encoder_engine"], "audio_encoder"
+        )
         audio_state = checkpoint["audio_encoder_extra_state"]
         return AudioEncoderTRT(
             audio_encoder_engine,
@@ -1218,16 +1267,16 @@ class WhisperTRTBuilder:
         """Construct the runtime text decoder matching the checkpoint's mode."""
         state = cls._load_text_decoder_state(checkpoint, dims)
         if checkpoint.get("decoder_mode") == "simple":
-            engine = _new_trt_module().cuda()
-            engine.load_state_dict(checkpoint["text_decoder_engine"])
+            engine = _load_engine_module(
+                checkpoint["text_decoder_engine"], "text_decoder"
+            )
             return TextDecoderTRT(engine, state)
 
-        cross_kv_engine = _new_trt_module().cuda()
-        cross_kv_engine.load_state_dict(checkpoint["cross_kv_engine"])
-        prefill_engine = _new_trt_module().cuda()
-        prefill_engine.load_state_dict(checkpoint["prefill_engine"])
-        step_engine = _new_trt_module().cuda()
-        step_engine.load_state_dict(checkpoint["decoder_step_engine"])
+        cross_kv_engine = _load_engine_module(checkpoint["cross_kv_engine"], "cross_kv")
+        prefill_engine = _load_engine_module(checkpoint["prefill_engine"], "prefill")
+        step_engine = _load_engine_module(
+            checkpoint["decoder_step_engine"], "decoder_step"
+        )
         return TextDecoderTRTKV(
             DecoderEngines(
                 cross_kv=cross_kv_engine,
@@ -1384,10 +1433,13 @@ def get_model_filename(
     Returns the compute-type- and decoder-mode-aware cached engine filename.
 
     Each distinct compute type (float32, float16, int8), decoder mode (kv,
-    simple), and workspace budget produces a separate cached engine file,
-    preventing silent reuse of an engine built under different settings. The
-    engine-schema tag additionally invalidates caches whose serialized layout
-    no longer matches the loader.
+    simple), workspace budget, and GPU architecture produces a separate cached
+    engine file, preventing silent reuse of an engine built under different
+    settings. The engine-schema tag additionally invalidates caches whose
+    serialized layout no longer matches the loader, and the ``sm<cc>`` tag keeps
+    a plan built on one compute capability from being loaded on another (TRT
+    deserialize "incompatible device" error 6) even when several machines share
+    one cache directory.
 
     Args:
         name (str): The model name (e.g. "tiny", "base.en").
@@ -1399,7 +1451,7 @@ def get_model_filename(
 
     Returns:
         str: Filename with the quant mode, schema, and workspace embedded
-            (e.g. "tiny_trt_float16_kv4_ws1024.pth").
+            (e.g. "tiny_trt_float16_kv4_ws1024_sm89.pth").
 
     Raises:
         RuntimeError: If ``name`` is not a recognised model name or if
@@ -1420,7 +1472,7 @@ def get_model_filename(
     )
     base = MODEL_FILENAMES[name]
     stem, ext = os.path.splitext(base)
-    return f"{stem}_{quant_mode}_{schema}_ws{workspace_mb}{ext}"
+    return f"{stem}_{quant_mode}_{schema}_ws{workspace_mb}_{get_device_arch_tag()}{ext}"
 
 
 def load_trt_model(
@@ -1459,7 +1511,19 @@ def load_trt_model(
             raise RuntimeError(f"No model found at {path}; pass build=True.")
         builder.build(path, verbose=verbose)
 
-    trt_model = builder.load(path)
+    try:
+        trt_model = builder.load(path)
+    except IncompatibleEngineError as err:
+        # The cached plan cannot run here (built for another GPU arch, or a
+        # different TRT version, or truncated). Filenames are arch-keyed, so
+        # this should be rare, but discard the unusable file and rebuild once
+        # rather than dying on a cache we know is dead.
+        if not build:
+            raise
+        logger.warning("Rebuilding unusable TRT checkpoint at %s: %s", path, err)
+        os.remove(path)  # engine checkpoints are multi-GB; don't keep a dead copy
+        builder.build(path, verbose=verbose)
+        trt_model = builder.load(path)
 
     try:
         silence = np.zeros((whisper.audio.N_SAMPLES,), dtype=np.float32)

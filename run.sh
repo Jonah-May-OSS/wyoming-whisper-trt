@@ -35,19 +35,13 @@ else
     echo "torch2trt is already installed. Skipping setup."
 fi
 
-# TRT engine plans are GPU-architecture specific. Suffix the engine dir with
-# the GPU's compute capability so a plan built on one arch is never loaded on
-# another (TRT deserialize "incompatible device" Error 6) if the container is
-# rescheduled onto a different GPU. Model weights are arch-independent; only
-# the engine cache (--data-dir) is keyed. Falls back to the bare dir when
-# nvidia-smi is unavailable.
-BASE_DATA_DIR="${DATA_DIR:-/data}"
-GPU_CC="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -cd '0-9')"
-if [ -n "$GPU_CC" ]; then
-    ENGINE_DATA_DIR="${BASE_DATA_DIR}/sm${GPU_CC}"
-else
-    ENGINE_DATA_DIR="${BASE_DATA_DIR}"
-fi
+# TRT engine plans are GPU-architecture specific, so a plan built on one arch
+# must never be loaded on another (TRT deserialize "incompatible device" Error
+# 6) if the container is rescheduled onto a different GPU. The compute
+# capability of the device torch actually selects is baked into the cached
+# engine filename (e.g. base_en_trt_float16_kv4_ws1024_sm86.pth), so a single
+# data dir is safe to share across GPUs — no directory keying needed here.
+ENGINE_DATA_DIR="${DATA_DIR:-/data}"
 mkdir -p "$ENGINE_DATA_DIR"
 echo "Using engine data dir: $ENGINE_DATA_DIR"
 

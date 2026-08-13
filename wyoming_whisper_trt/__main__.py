@@ -440,6 +440,10 @@ async def main() -> None:
     # Load Whisper TRT model
     try:
         logger.info("Loading Whisper TRT model '%s'...", model_name)
+        # The built TRT engine checkpoint lives in the download dir. Its
+        # filename encodes compute type, decoder mode, workspace budget, and the
+        # GPU compute capability, so a dir shared between machines with
+        # different GPUs never yields an engine this device can't deserialize.
         model_path = os.path.join(
             args.download_dir,
             get_model_filename(
