@@ -124,7 +124,7 @@ def get_trt_version_tag() -> str:
     settings. Keying the filename on the major version means a TensorRT upgrade
     quietly builds a new engine instead of failing to deserialize the old one.
     """
-    return "trt" + str(tensorrt.__version__).split(".")[0]
+    return "trt" + str(tensorrt.__version__).split(".", maxsplit=1)[0]
 
 
 def _load_engine_module(engine_state: dict[str, Any], what: str) -> Any:
