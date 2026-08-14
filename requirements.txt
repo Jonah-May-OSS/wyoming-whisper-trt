@@ -5,7 +5,7 @@ tensorrt_cu13_bindings~=10.16.1.11
 tensorrt_cu13_libs~=10.16.1.11
 tensorrt~=10.16.1.11
 onnx~=1.22.0
-onnxscript~=0.7.0
+onnxscript~=0.7.1
 onnx-graphsurgeon==0.6.1
 # Not imported by this project directly: onnx-graphsurgeon's fold_constants()
 # evaluates constant subgraphs through onnxruntime (CPUExecutionProvider only,
