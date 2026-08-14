@@ -16,5 +16,9 @@ services:
       DEBUG:      "${DEBUG:-false}"
       NVIDIA_VISIBLE_DEVICES:     all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      # Required on Jetson. run.sh keys its first-run setup off this: without it
+      # setup installs the x86 torch/TensorRT pins from requirements.txt over
+      # JetPack's own builds and the container fails to start.
+      NVIDIA_EMBEDDED: "true"
     network_mode: host
     runtime: nvidia
