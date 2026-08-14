@@ -83,7 +83,11 @@ COPY --from=builder /usr/src/wyoming-whisper-trt /usr/src/wyoming-whisper-trt
 # venv resolves torch and tensorrt through the base image's site-packages, so
 # a base whose python minor version or CUDA stack does not match the venv
 # surfaces here instead of at container startup.
-RUN /usr/src/wyoming-whisper-trt/.venv/bin/python3 -c \
+# The app is not pip-installed into the venv (script/setup installs
+# requirements + torch2trt only), so wyoming_whisper_trt resolves via the
+# working directory, exactly as run.sh does before launching it.
+RUN cd /usr/src/wyoming-whisper-trt \
+    && ./.venv/bin/python3 -c \
         "import sys, torch, tensorrt, wyoming_whisper_trt; \
          print('python', sys.version.split()[0], '/ torch', torch.__version__, \
                '/ tensorrt', tensorrt.__version__)"

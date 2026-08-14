@@ -84,6 +84,10 @@ COPY --from=builder /usr/src/wyoming-whisper-trt /usr/src/wyoming-whisper-trt
 # wheels, so a runtime whose python minor version differs from the builder's
 # produces an image that only fails when a container starts. Catch it here.
 RUN set -eu; \
+    # The app is not pip-installed into the venv (script/setup installs
+    # requirements + torch2trt only), so wyoming_whisper_trt resolves via the
+    # working directory, exactly as run.sh does before launching it.
+    cd /usr/src/wyoming-whisper-trt; \
     py=/usr/src/wyoming-whisper-trt/.venv/bin/python3; \
     if ! "$py" -c 'import sys; print("venv python:", sys.version)'; then \
         echo "ERROR: the venv interpreter does not run on this runtime base." >&2; \
