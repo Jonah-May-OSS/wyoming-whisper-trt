@@ -62,7 +62,6 @@ from ._decoder import (
     TextDecoderTRT,
     TextDecoderTRTKV,
 )
-from ._quant import quantize_encoder_int8
 from .cache import get_cache_dir, make_cache_dir
 
 logger = logging.getLogger(__name__)
@@ -1067,9 +1066,7 @@ class WhisperTRTBuilder:
         """Build and return a TensorRT audio encoder engine."""
         dims = cls._load_model_once()
         model_inst = load_model(cls.model).cuda().eval()
-        # Typed as the base class because int8 mode swaps quantized layers in
-        # and hands back a plain module.
-        encoder_module: nn.Module = _AudioEncoderEngine(
+        encoder_module = _AudioEncoderEngine(
             model_inst.encoder.conv1,
             model_inst.encoder.conv2,
             model_inst.encoder.blocks,
@@ -1088,29 +1085,22 @@ class WhisperTRTBuilder:
         # Trace through whisper's manual-attention path (not SDPA) for the
         # same reason as build_text_decoder_engine.
         _reclaim_memory()
+        # Explicit quantization: torch2trt rewrites the exported ONNX graph with
+        # Q/DQ pairs calibrated on these mels, so the graph — not a builder flag
+        # TensorRT is free to ignore — is what makes the engine INT8. Real speech
+        # rather than the random trace input is what makes the ranges usable.
+        int8_calib_dataset = (
+            _encoder_int8_calib_dataset(dims.n_mels, n_frames, positional_embedding)
+            if int8_mode
+            else None
+        )
         with disable_sdpa():
-            if int8_mode:
-                # Explicit quantization: the Q/DQ pairs (and the activation
-                # ranges behind them) are baked into the module here, so the
-                # exported ONNX graph — not a builder flag TensorRT may ignore
-                # — is what makes the engine INT8. Calibrating on real speech
-                # mels rather than the random trace input is what makes those
-                # ranges usable.
-                calib_dataset = _encoder_int8_calib_dataset(
-                    dims.n_mels, n_frames, positional_embedding
-                )
-                encoder_module = quantize_encoder_int8(
-                    encoder_module, calib_dataset, verbose=cls.verbose
-                )
-                # The mels are GB-scale on larger models; drop them before the
-                # build allocates its own buffers.
-                del calib_dataset
-                _reclaim_memory()
             return _torch2trt_convert(
                 encoder_module,
                 [x, positional_embedding],
                 use_onnx=True,
                 int8_mode=int8_mode,
+                int8_calib_dataset=int8_calib_dataset,
                 min_shapes=[(1, dims.n_mels, 1), (1, dims.n_audio_state)],
                 opt_shapes=[
                     (1, dims.n_mels, n_frames),
@@ -1124,8 +1114,8 @@ class WhisperTRTBuilder:
                 output_names=["output"],
                 max_workspace_size=cls.max_workspace_size,
                 # Everything the Q/DQ pairs don't cover (attention matmuls,
-                # layer norms, softmax) runs FP16 rather than FP32, so an int8
-                # encoder is INT8-where-quantized and FP16 elsewhere.
+                # layer norms, softmax) is cast to FP16 in the same quantizer
+                # pass, so an int8 encoder is INT8-where-quantized, FP16 else.
                 fp16_mode=cls.fp16_mode or int8_mode,
                 log_level=_trt_log_level(cls.verbose),
             )

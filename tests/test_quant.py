@@ -1,19 +1,54 @@
 """Unit tests for the explicit INT8 (Q/DQ) quantization of the audio encoder.
 
 TensorRT 11 only honours INT8 that is already in the graph, so what matters is
-that calibration produces a module whose ONNX export carries
-QuantizeLinear/DequantizeLinear pairs. That is checkable on CPU — no GPU, no
-TensorRT, no engine build — which is what these tests do.
+that the rewritten graph carries Q/DQ pairs, keeps FP32 I/O, and is *valid* —
+type inference included, since a graph whose QuantizeLinear scale no longer
+matches its input type passes a shallow check and then fails to parse. All of
+that is checkable on CPU: no GPU, no TensorRT, no engine build.
+
+These exercise the same ModelOpt entry points torch2trt calls during conversion
+(``torch2trt/precision.py``), because that is where the encoder's precision is
+decided.
 """
 
 import collections
+import importlib
+import importlib.util
+import sys
+from pathlib import Path
+from types import ModuleType
 
+import numpy as np
 import onnx
 import pytest
 import torch
 from torch import nn
 
-from whisper_trt._quant import int8_available, quantize_encoder_int8
+from whisper_trt._quant import int8_available
+
+_T2T_DIR = Path(__file__).resolve().parent.parent / "torch2trt" / "torch2trt"
+
+
+def _t2t(name: str) -> ModuleType:
+    """Import a torch2trt module, falling back to the submodule checkout.
+
+    ``script/setup`` installs torch2trt, but these tests need to run without a
+    compiled install too (no CUDA toolkit on a CPU-only checkout), and both
+    modules used here import nothing from torch2trt itself.
+    """
+    try:
+        return importlib.import_module(f"torch2trt.{name}")
+    except ImportError:
+        pass
+    key = f"_torch2trt_checkout_{name}"
+    if key not in sys.modules:
+        spec = importlib.util.spec_from_file_location(key, _T2T_DIR / f"{name}.py")
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[key] = module
+        spec.loader.exec_module(module)
+    return sys.modules[key]
+
 
 pytestmark = pytest.mark.skipif(
     not int8_available(), reason="nvidia-modelopt is not installed"
@@ -29,7 +64,7 @@ class _MiniEncoder(nn.Module):
 
     def __init__(self, seed: int = 0) -> None:
         super().__init__()
-        torch.manual_seed(seed)  # deterministic weights, for the accuracy check
+        torch.manual_seed(seed)
         self.conv = nn.Conv1d(_N_MELS, _N_STATE, 3, padding=1)
         self.gelu = nn.GELU()
         self.proj = nn.Linear(_N_STATE, _N_STATE)
@@ -44,12 +79,8 @@ class _MiniEncoder(nn.Module):
         return self.ln(self.proj(x))
 
 
-def _calibration_set(n: int = 3, seed: int = 0) -> list[list[torch.Tensor]]:
-    """Stand-in for the mel calibration set: the module's positional arguments.
-
-    Seeded, because quantization error depends on the data the ranges were
-    calibrated from and a drifting fixture makes the accuracy check flaky.
-    """
+def _calibration_set(n: int = 4, seed: int = 0) -> list[list[torch.Tensor]]:
+    """Stand-in for the mel calibration set: the module's positional arguments."""
     generator = torch.Generator().manual_seed(seed)
     pos = torch.randn(_N_FRAMES, _N_STATE, generator=generator)
     return [
@@ -57,61 +88,106 @@ def _calibration_set(n: int = 3, seed: int = 0) -> list[list[torch.Tensor]]:
     ]
 
 
-def _export_op_counts(module: nn.Module, tmp_path) -> collections.Counter:
-    """Export ``module`` through the same exporter torch2trt uses and count ops."""
-    path = tmp_path / "model.onnx"
-    inputs = _calibration_set(1)[0]
+_INPUT_NAMES = ["x", "positional_embedding"]
+
+
+def _export(module: nn.Module, path) -> str:
+    """Export through the exporter and options torch2trt uses."""
     torch.onnx.export(
         module,
-        tuple(inputs),
+        tuple(_calibration_set(1)[0]),
         str(path),
-        input_names=["x", "positional_embedding"],
+        input_names=_INPUT_NAMES,
         output_names=["output"],
         dynamic_axes={"x": {2: "frames"}},
-        # torch2trt forces the TorchScript exporter on torch >= 2.9, and it is
-        # the only one ModelOpt's quantizers emit Q/DQ through.
         dynamo=False,
     )
-    return collections.Counter(n.op_type for n in onnx.load(str(path)).graph.node)
+    return str(path)
 
 
-class TestQuantizeEncoderInt8:
-    """Calibration turns the module into one that exports Q/DQ."""
+def _ops(model: onnx.ModelProto) -> collections.Counter:
+    return collections.Counter(node.op_type for node in model.graph.node)
 
-    def test_export_carries_qdq_pairs(self, tmp_path) -> None:
-        module = _MiniEncoder().eval()
-        assert "QuantizeLinear" not in _export_op_counts(module, tmp_path)
 
-        quantized = quantize_encoder_int8(module, _calibration_set())
-        ops = _export_op_counts(quantized, tmp_path)
-        # Both the conv and the projection contribute weight and activation
+def _elem_types(model: onnx.ModelProto) -> set[int]:
+    return {
+        vi.type.tensor_type.elem_type
+        for vi in list(model.graph.input) + list(model.graph.output)
+    }
+
+
+def _quantize(src: str, dst: str, fp16: bool) -> onnx.ModelProto:
+    """Run the ONNX INT8 rewrite exactly as torch2trt does."""
+    precision = _t2t("precision")
+    calibration = _calibration_set()
+    flattener = _t2t("flattener").Flattener.from_value(calibration[0])
+    arrays = precision.calibration_arrays(calibration, flattener, _INPUT_NAMES)
+    # Each input is stacked the same number of times, which is how ModelOpt's
+    # data reader recovers the iteration count.
+    assert arrays["x"].shape[0] // 1 == len(calibration)
+    assert arrays["positional_embedding"].shape[0] // _N_FRAMES == len(calibration)
+    precision.quantize_onnx_int8(src, dst, arrays, fp16=fp16)
+    return onnx.load(dst)
+
+
+class TestOnnxInt8Quantization:
+    """The rewritten graph is INT8, optionally FP16, and valid."""
+
+    def test_inserts_qdq_pairs(self, tmp_path) -> None:
+        src = _export(_MiniEncoder().eval(), tmp_path / "model.onnx")
+        assert "QuantizeLinear" not in _ops(onnx.load(src))
+
+        ops = _ops(_quantize(src, str(tmp_path / "int8.onnx"), fp16=True))
+        # The conv and the projection each contribute weight and activation
         # quantizers, and every Quantize is paired with a Dequantize.
         assert ops["QuantizeLinear"] >= 4
         assert ops["QuantizeLinear"] == ops["DequantizeLinear"]
 
-    def test_quantizes_in_place(self) -> None:
-        module = _MiniEncoder().eval()
-        assert quantize_encoder_int8(module, _calibration_set()) is module
+    def test_int8_with_fp16_is_a_valid_graph(self, tmp_path) -> None:
+        """The regression: casting a Q/DQ graph with AutoCast produced a
+        QuantizeLinear whose scale type no longer matched its input, which only
+        strict type inference catches."""
+        src = _export(_MiniEncoder().eval(), tmp_path / "model.onnx")
+        model = _quantize(src, str(tmp_path / "int8.onnx"), fp16=True)
+        onnx.checker.check_model(model, full_check=True)
 
-    def test_calibrated_output_stays_close(self) -> None:
-        """Q/DQ costs accuracy, but INT8 over a calibrated range stays close.
+    def test_int8_without_fp16_is_a_valid_graph(self, tmp_path) -> None:
+        src = _export(_MiniEncoder().eval(), tmp_path / "model.onnx")
+        model = _quantize(src, str(tmp_path / "int8.onnx"), fp16=False)
+        onnx.checker.check_model(model, full_check=True)
 
-        Compared against the output's own spread rather than an absolute
-        tolerance: what matters is that quantization error is small relative to
-        the signal, not that it is below some fixed epsilon.
-        """
-        module = _MiniEncoder().eval()
-        calibration = _calibration_set()
-        inputs = calibration[0]
-        with torch.no_grad():
-            reference = module(*inputs)
-        quantize_encoder_int8(module, calibration)
-        with torch.no_grad():
-            quantized = module(*inputs)
-        error = (quantized - reference).abs().mean().item()
-        assert error < 0.1 * reference.std().item()
+    def test_graph_io_stays_fp32(self, tmp_path) -> None:
+        """The runtime keeps feeding mels and reading features as FP32."""
+        src = _export(_MiniEncoder().eval(), tmp_path / "model.onnx")
+        model = _quantize(src, str(tmp_path / "int8.onnx"), fp16=True)
+        assert _elem_types(model) == {onnx.TensorProto.FLOAT}
 
-    def test_empty_calibration_set_is_rejected(self) -> None:
-        """Without calibration data the quantizers have no ranges to export."""
-        with pytest.raises(RuntimeError, match="calibration set is empty"):
-            quantize_encoder_int8(_MiniEncoder().eval(), [])
+    def test_fp16_only_path_is_a_valid_graph(self, tmp_path) -> None:
+        """float16 (the default compute type) goes through AutoCast instead."""
+        src = _export(_MiniEncoder().eval(), tmp_path / "model.onnx")
+        model = _t2t("precision").autocast_onnx_to_fp16(onnx.load(src))
+        onnx.checker.check_model(model, full_check=True)
+        assert _ops(model)["Cast"] > 0
+        assert _elem_types(model) == {onnx.TensorProto.FLOAT}
+
+
+class TestCalibrationArrays:
+    """Calibration data is handed over in the layout ModelOpt expects."""
+
+    def test_rejects_a_mismatched_item(self) -> None:
+        calibration = _calibration_set(1)
+        flattener = _t2t("flattener").Flattener.from_value(calibration[0])
+        with pytest.raises(ValueError, match="takes 3 inputs"):
+            _t2t("precision").calibration_arrays(
+                calibration, flattener, [*_INPUT_NAMES, "extra"]
+            )
+
+    def test_concatenates_along_the_batch_axis(self) -> None:
+        calibration = _calibration_set(3)
+        flattener = _t2t("flattener").Flattener.from_value(calibration[0])
+        arrays = _t2t("precision").calibration_arrays(
+            calibration, flattener, _INPUT_NAMES
+        )
+        assert arrays["x"].shape == (3, _N_MELS, _N_FRAMES)
+        assert arrays["positional_embedding"].shape == (3 * _N_FRAMES, _N_STATE)
+        assert arrays["x"].dtype == np.float32

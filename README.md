@@ -298,15 +298,19 @@ GPU-side mel, fewer host syncs); the KV cache itself is the last ~14 %.
 
 #### A note on `int8`
 
-`COMPUTE_TYPE=int8` quantizes the audio encoder's convolutions and linear
-projections to INT8 and leaves everything else — attention matmuls, layer
-norms, and the whole text decoder — in FP16. Quantization is *explicit*: the
-encoder's Q/DQ pairs are inserted and calibrated (per-channel INT8 weights,
-per-tensor INT8 activations) with [NVIDIA
-ModelOpt](https://github.com/NVIDIA/TensorRT-Model-Optimizer) before the ONNX
-export, on real speech mels from the clips bundled in
-`whisper_trt/calibration/`. Add your own 16 kHz mono WAVs there to widen
-acoustic coverage.
+`COMPUTE_TYPE=int8` quantizes the audio encoder's convolutions and matmuls to
+INT8 and leaves everything else — layer norms, softmax, and the whole text
+decoder — in FP16. Quantization is *explicit*: after the encoder is exported to
+ONNX, [NVIDIA ModelOpt](https://github.com/NVIDIA/TensorRT-Model-Optimizer)
+rewrites the graph with Q/DQ pairs whose activation ranges were calibrated on
+real speech mels — from the clips bundled in `whisper_trt/calibration/`, so add
+your own 16 kHz mono WAVs there to widen acoustic coverage — and casts the
+unquantized remainder to FP16 in the same pass. Graph inputs and outputs stay
+FP32, so nothing changes at the runtime boundary.
+
+Calibration replays the graph through onnxruntime on the **CPU** (the image
+ships CPU-only onnxruntime), so an int8 build is slower than a float16 one by
+roughly one CPU encoder pass per clip — noticeable on `medium`/`large`.
 
 Explicit quantization is the only kind TensorRT 11 supports — implicit
 quantization, where the builder ran a calibrator and then used INT8 only where
