@@ -12,9 +12,13 @@ if [ ! -d ".venv" ]; then
     if [ "${NVIDIA_EMBEDDED:-false}" = "true" ]; then
     echo "NVIDIA_EMBEDDED is true. Adjusting setup for embedded environment..."
     # Remove tensorrt and torch from requirements.txt if NVIDIA_EMBEDDED is true
-    # This is necessary because the torch and tensorrt packages installed on NVIDIA embedded devices are not compatible 
+    # This is necessary because the torch and tensorrt packages installed on NVIDIA embedded devices are not compatible
     # with the versions specified in requirements.txt, and attempting to install them will cause conflicts and break the setup process.
-        sed -i '/tensorrt/d;/torch/d' requirements.txt
+    # nvidia-modelopt (and the ONNX packages it needs) go with them: it requires
+    # torch >= 2.8, so pip would try to pull a fresh torch over JetPack's. That
+    # only costs COMPUTE_TYPE=int8, which needs ModelOpt to insert its Q/DQ —
+    # float16 and float32 build fine without it on JetPack's TensorRT 10.
+        sed -i '/tensorrt/d;/torch/d;/nvidia-modelopt/d;/ml_dtypes/d;/polygraphy/d;/onnxslim/d;/lief/d' requirements.txt
     # Enable system site packages so VENV can access TensorRT and PyTorch installed on the system
         setup_args+=(--system_site_packages)
     fi
@@ -39,8 +43,11 @@ fi
 # must never be loaded on another (TRT deserialize "incompatible device" Error
 # 6) if the container is rescheduled onto a different GPU. The compute
 # capability of the device torch actually selects is baked into the cached
-# engine filename (e.g. base_en_trt_float16_kv4_ws1024_sm86.pth), so a single
-# data dir is safe to share across GPUs — no directory keying needed here.
+# engine filename (e.g. base_en_trt_float16_kv4_ws1024_sm86_trt11.pth), so a
+# single data dir is safe to share across GPUs — no directory keying needed
+# here. The trailing tag is the TensorRT major version, whose plans are just as
+# non-interchangeable, so upgrading TensorRT builds a new engine instead of
+# failing to load the old one.
 ENGINE_DATA_DIR="${DATA_DIR:-/data}"
 mkdir -p "$ENGINE_DATA_DIR"
 echo "Using engine data dir: $ENGINE_DATA_DIR"

@@ -339,7 +339,8 @@ If you see `pip._vendor.urllib3.exceptions.ReadTimeoutError: HTTPSConnectionPool
 
 - **Required**: NVIDIA GPU with CUDA compute capability 7.0+
 - **Required**: NVIDIA Container Toolkit (for Docker)
-- **Required**: CUDA 12.8+ and TensorRT 10.13+
+- **Required**: CUDA 12.8+ and TensorRT 11.0+ (11 removed weak typing, so
+  precision is expressed in the ONNX graph — see `whisper_trt/_quant.py`)
 - **No CPU fallback**: TensorRT engines are GPU-only; a CUDA device is mandatory
 
 ## CI/CD Integration

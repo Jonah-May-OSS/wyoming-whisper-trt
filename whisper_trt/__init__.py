@@ -22,6 +22,7 @@
 """Public API for the whisper_trt package."""
 
 from .__version__ import __version__
+from ._quant import int8_available
 from .cache import get_cache_dir, set_cache_dir
 from .model import (
     LARGE_MODELS,
@@ -32,6 +33,7 @@ from .model import (
     auto_workspace_mb,
     get_device_arch_tag,
     get_model_filename,
+    get_trt_version_tag,
     load_trt_model,
 )
 
@@ -46,6 +48,8 @@ __all__ = [
     "get_cache_dir",
     "get_device_arch_tag",
     "get_model_filename",
+    "get_trt_version_tag",
+    "int8_available",
     "load_trt_model",
     "set_cache_dir",
 ]

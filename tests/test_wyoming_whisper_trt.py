@@ -39,7 +39,7 @@ _SAMPLES_PER_CHUNK = 1024
 _STARTUP_TIMEOUT = 600
 _TRANSCRIBE_TIMEOUT = 120
 
-_INT8_WARNING_FRAGMENT = "int8 requests TensorRT implicit INT8"
+_INT8_WARNING_FRAGMENT = "int8 quantizes the encoder's convolutions"
 
 
 def _free_port() -> int:
@@ -262,7 +262,7 @@ async def test_wyoming_whisper_trt(compute_type: str, decoder_mode: str) -> None
         await asyncio.gather(*drains)
 
     if compute_type == "int8":
-        # The int8 no-op warning added after benchmarking must be present.
+        # int8 trades accuracy for speed, so the accuracy warning must be present.
         assert _INT8_WARNING_FRAGMENT in stderr_buf.decode(errors="replace"), (
-            "Expected the int8 reality-check warning in server logs"
+            "Expected the int8 accuracy warning in server logs"
         )

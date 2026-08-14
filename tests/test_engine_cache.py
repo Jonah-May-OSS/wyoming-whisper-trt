@@ -1,9 +1,10 @@
-"""Unit tests for GPU-architecture keying of the cached TRT engine.
+"""Unit tests for hardware/TensorRT keying of the cached TRT engine.
 
-TensorRT engine plans are only valid on the compute capability they were built
-on, so the arch tag is part of the cache filename and a plan that still fails to
-deserialize is discarded and rebuilt once. These tests mock the CUDA capability
-query and the builder, so they run on CPU-only CI runners (no real GPU needed).
+TensorRT engine plans are only valid on the compute capability *and* the
+TensorRT major version they were built on, so both are part of the cache
+filename, and a plan that still fails to deserialize is discarded and rebuilt
+once. These tests mock the CUDA capability query, the TensorRT version, and the
+builder, so they run on CPU-only CI runners (no real GPU needed).
 """
 
 from pathlib import Path
@@ -11,7 +12,11 @@ from unittest.mock import patch
 
 import pytest
 
-from whisper_trt import IncompatibleEngineError, get_device_arch_tag
+from whisper_trt import (
+    IncompatibleEngineError,
+    get_device_arch_tag,
+    get_trt_version_tag,
+)
 from whisper_trt.model import get_model_filename, load_trt_model
 
 
@@ -28,6 +33,25 @@ def _cuda_available(available: bool):
         "whisper_trt.model.torch.cuda.is_available",
         return_value=available,
     )
+
+
+def _trt_version(version: str):
+    """Patch the reported TensorRT version string."""
+    return patch("whisper_trt.model.tensorrt.__version__", version)
+
+
+class TestTrtVersionTag:
+    """``get_trt_version_tag`` keys the cache on the TensorRT major version."""
+
+    def test_reports_the_major_version(self) -> None:
+        with _trt_version("11.2.1.2"):
+            assert get_trt_version_tag() == "trt11"
+
+    def test_minor_upgrades_share_a_tag(self) -> None:
+        with _trt_version("11.0.0.114"):
+            first = get_trt_version_tag()
+        with _trt_version("11.2.1.2"):
+            assert get_trt_version_tag() == first
 
 
 class TestDeviceArchTag:
@@ -55,14 +79,25 @@ class TestDeviceArchTag:
 class TestArchKeyedFilename:
     """The cache filename separates plans built on different architectures."""
 
-    def test_filename_carries_the_arch_tag(self) -> None:
-        with _cuda_available(True), _capability(8, 6):
+    def test_filename_carries_the_arch_and_trt_tags(self) -> None:
+        with _cuda_available(True), _capability(8, 6), _trt_version("11.2.1.2"):
             assert (
                 get_model_filename(
                     "base.en", "float16", decoder_mode="kv", max_workspace_mb=1024
                 )
-                == "base_en_trt_float16_kv4_ws1024_sm86.pth"
+                == "base_en_trt_float16_kv4_ws1024_sm86_trt11.pth"
             )
+
+    def test_different_trt_majors_never_share_a_filename(self) -> None:
+        """A TensorRT 10 plan must not be handed to TensorRT 11, which cannot load it."""
+        args = ("base.en", "float16")
+        kwargs = {"decoder_mode": "kv", "max_workspace_mb": 1024}
+        with _cuda_available(True), _capability(8, 6):
+            with _trt_version("10.16.1.11"):
+                on_trt10 = get_model_filename(*args, **kwargs)
+            with _trt_version("11.2.1.2"):
+                on_trt11 = get_model_filename(*args, **kwargs)
+        assert on_trt10 != on_trt11
 
     def test_different_archs_never_share_a_filename(self) -> None:
         """The regression: an sm_86 plan must not be picked up on an sm_89 GPU."""

@@ -62,6 +62,7 @@ from ._decoder import (
     TextDecoderTRT,
     TextDecoderTRTKV,
 )
+from ._quant import quantize_encoder_int8
 from .cache import get_cache_dir, make_cache_dir
 
 logger = logging.getLogger(__name__)
@@ -113,6 +114,18 @@ def get_device_arch_tag() -> str:
         logger.debug("Could not query CUDA compute capability: %s", err)
         return "smunknown"
     return f"sm{major}{minor}"
+
+
+def get_trt_version_tag() -> str:
+    """Return a cache tag for the TensorRT major version in use.
+
+    A serialized plan is only loadable by the TensorRT major version that built
+    it, and 11 changed how precision is expressed (strong typing, explicit
+    quantization) so its engines differ from a 10.x plan even for identical
+    settings. Keying the filename on the major version means a TensorRT upgrade
+    quietly builds a new engine instead of failing to deserialize the old one.
+    """
+    return "trt" + str(tensorrt.__version__).split(".")[0]
 
 
 def _load_engine_module(engine_state: dict[str, Any], what: str) -> Any:
@@ -208,10 +221,10 @@ def _reclaim_memory() -> None:
 
 # Directory of bundled mono 16 kHz speech clips used to calibrate INT8
 # activation ranges for the audio encoder. Calibrating on real speech (rather
-# than the random trace inputs torch2trt falls back to) is what makes INT8
-# produce usable scales. Drop additional ``*.wav`` files in here to widen
-# acoustic coverage — the more diverse speakers / recording conditions, the
-# better the calibration. Clips must be mono, 16 kHz, 16-bit PCM.
+# than the random trace input) is what makes the Q/DQ scales usable. Drop
+# additional ``*.wav`` files in here to widen acoustic coverage — the more
+# diverse speakers / recording conditions, the better the calibration. Clips
+# must be mono, 16 kHz, 16-bit PCM.
 _CALIBRATION_DIR = "calibration"
 
 
@@ -831,11 +844,10 @@ class WhisperTRTBuilder:
         """Return the effective compute type based on builder configuration.
 
         Reconciles ``quant_mode`` and ``fp16_mode`` into a single canonical
-        string used to key on-disk engine filenames. Note that "int8" denotes
-        a *request* for an INT8-calibrated encoder (the decoder always stays
-        FP16); TensorRT implicit quantization is per-layer optional, so the
-        built engine may contain no INT8 layers at all — see
-        ``build_audio_encoder_engine``.
+        string used to key on-disk engine filenames. Note that "int8" describes
+        the encoder only — the decoder always stays FP16 — and that the encoder
+        is INT8 in its quantized layers (convolutions and projections) and FP16
+        elsewhere; see ``build_audio_encoder_engine``.
 
         Returns:
             str: "int8" when ``quant_mode == "int8"``;
@@ -1055,7 +1067,9 @@ class WhisperTRTBuilder:
         """Build and return a TensorRT audio encoder engine."""
         dims = cls._load_model_once()
         model_inst = load_model(cls.model).cuda().eval()
-        encoder_module = _AudioEncoderEngine(
+        # Typed as the base class because int8 mode swaps quantized layers in
+        # and hands back a plain module.
+        encoder_module: nn.Module = _AudioEncoderEngine(
             model_inst.encoder.conv1,
             model_inst.encoder.conv2,
             model_inst.encoder.blocks,
@@ -1071,32 +1085,32 @@ class WhisperTRTBuilder:
             positional_embedding = positional_embedding.cuda()
         positional_embedding = positional_embedding.detach()
         int8_mode = cls.quant_mode == "int8"
-        # Calibrate INT8 activation ranges on real speech mels rather than
-        # letting torch2trt fall back to the random trace inputs.
-        #
-        # Caveat (measured): this is TensorRT *implicit* quantization, which
-        # treats INT8 as optional per layer — TensorRT only picks an INT8
-        # tactic where it times faster than FP16. On TensorRT 10.16 / RTX
-        # 3050 with model 'base', every layer came out FP16 and the engine
-        # was identical to a float16 build (verify with script/layer_report).
-        # Implicit quantization is deprecated in TensorRT 10; guaranteed INT8
-        # would need explicit Q/DQ quantization, worthwhile only for
-        # medium/large encoders.
-        int8_calib_dataset = (
-            _encoder_int8_calib_dataset(dims.n_mels, n_frames, positional_embedding)
-            if int8_mode
-            else None
-        )
         # Trace through whisper's manual-attention path (not SDPA) for the
         # same reason as build_text_decoder_engine.
         _reclaim_memory()
         with disable_sdpa():
+            if int8_mode:
+                # Explicit quantization: the Q/DQ pairs (and the activation
+                # ranges behind them) are baked into the module here, so the
+                # exported ONNX graph — not a builder flag TensorRT may ignore
+                # — is what makes the engine INT8. Calibrating on real speech
+                # mels rather than the random trace input is what makes those
+                # ranges usable.
+                calib_dataset = _encoder_int8_calib_dataset(
+                    dims.n_mels, n_frames, positional_embedding
+                )
+                encoder_module = quantize_encoder_int8(
+                    encoder_module, calib_dataset, verbose=cls.verbose
+                )
+                # The mels are GB-scale on larger models; drop them before the
+                # build allocates its own buffers.
+                del calib_dataset
+                _reclaim_memory()
             return _torch2trt_convert(
                 encoder_module,
                 [x, positional_embedding],
                 use_onnx=True,
                 int8_mode=int8_mode,
-                int8_calib_dataset=int8_calib_dataset,
                 min_shapes=[(1, dims.n_mels, 1), (1, dims.n_audio_state)],
                 opt_shapes=[
                     (1, dims.n_mels, n_frames),
@@ -1109,9 +1123,9 @@ class WhisperTRTBuilder:
                 input_names=["x", "positional_embedding"],
                 output_names=["output"],
                 max_workspace_size=cls.max_workspace_size,
-                # Allow FP16 fallback alongside INT8 so TensorRT can keep
-                # precision-sensitive layers in FP16 (mixed precision) instead
-                # of forcing every layer to INT8.
+                # Everything the Q/DQ pairs don't cover (attention matmuls,
+                # layer norms, softmax) runs FP16 rather than FP32, so an int8
+                # encoder is INT8-where-quantized and FP16 elsewhere.
                 fp16_mode=cls.fp16_mode or int8_mode,
                 log_level=_trt_log_level(cls.verbose),
             )
@@ -1437,10 +1451,11 @@ def get_model_filename(
     simple), workspace budget, and GPU architecture produces a separate cached
     engine file, preventing silent reuse of an engine built under different
     settings. The engine-schema tag additionally invalidates caches whose
-    serialized layout no longer matches the loader, and the ``sm<cc>`` tag keeps
+    serialized layout no longer matches the loader, the ``sm<cc>`` tag keeps
     a plan built on one compute capability from being loaded on another (TRT
     deserialize "incompatible device" error 6) even when several machines share
-    one cache directory.
+    one cache directory, and the ``trt<major>`` tag does the same across
+    TensorRT major versions, whose plans are never interchangeable.
 
     Args:
         name (str): The model name (e.g. "tiny", "base.en").
@@ -1451,8 +1466,9 @@ def get_model_filename(
             defaults to the builder's current ``max_workspace_size`` converted to MiB.
 
     Returns:
-        str: Filename with the quant mode, schema, and workspace embedded
-            (e.g. "tiny_trt_float16_kv4_ws1024_sm89.pth").
+        str: Filename with the quant mode, schema, workspace, GPU architecture,
+            and TensorRT major version embedded
+            (e.g. "tiny_trt_float16_kv4_ws1024_sm89_trt11.pth").
 
     Raises:
         RuntimeError: If ``name`` is not a recognised model name or if
@@ -1473,7 +1489,10 @@ def get_model_filename(
     )
     base = MODEL_FILENAMES[name]
     stem, ext = os.path.splitext(base)
-    return f"{stem}_{quant_mode}_{schema}_ws{workspace_mb}_{get_device_arch_tag()}{ext}"
+    return (
+        f"{stem}_{quant_mode}_{schema}_ws{workspace_mb}"
+        f"_{get_device_arch_tag()}_{get_trt_version_tag()}{ext}"
+    )
 
 
 def load_trt_model(
