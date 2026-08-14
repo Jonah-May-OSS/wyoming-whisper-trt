@@ -15,6 +15,12 @@
     {
       "automerge": true,
       "matchUpdateTypes": ["major", "minor", "patch", "pin", "digest"]
+    },
+    {
+      "description": "The runtime stage's Ubuntu tag is coupled to the NGC builder's Ubuntu release, since the venv built in the builder stage is relocated into the runtime stage and needs the same python minor version. It cannot be bumped on its own, so raise a PR for review but never automerge. Must stay last: later packageRules override earlier ones.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["ubuntu"],
+      "automerge": false
     }
   ]
 }
