@@ -1,103 +1,54 @@
 # syntax=docker/dockerfile:1
 
 # ===========================================================================
-# Builder stage: the NGC PyTorch iGPU container. This replaces
-# l4t-jetpack:r36.4.0, which pinned the image to python3.10 and a torch
-# 2.5.0a0 wheel from the JetPack 6.1 redist (Aug 2024) — the newest torch
-# NVIDIA publishes on that channel. The -igpu framework containers are a
-# different track: 26.02-py3-igpu is python3.12 with torch 2.11.0a0, CUDA
-# 12.9.11, cuDNN 9.10.2 and TensorRT 10.11.0.33+jp6. The +jp6 suffix and
-# TORCH_CUDA_ARCH_LIST=8.7+PTX are what make it valid on JetPack 6 / Orin;
-# it is not suitable for Xavier (sm_72) or Thor.
+# The NGC PyTorch iGPU container. This replaces l4t-jetpack:r36.4.0, which
+# capped the image at python3.10 and a torch 2.5.0a0+nv24.08 wheel from the
+# JetPack 6.1 redist (Aug 2024) — the newest torch NVIDIA publishes on that
+# channel, since every JetPack 6 wheel index is cp310-only.
 #
-# 26.02 is the newest -igpu tag. The x86 image tracks 26.07, but 26.03-26.07
-# have no -igpu variant published, so the two Dockerfiles are expected to sit
-# a few releases apart.
+# The -igpu framework containers are a different track: 26.02-py3-igpu is
+# python3.12 with torch 2.11.0a0, CUDA 12.9.11, cuDNN 9.10.2 and TensorRT
+# 10.11.0.33+jp6. The +jp6 build and TORCH_CUDA_ARCH_LIST=8.7+PTX are what
+# make it valid on JetPack 6 / Orin; it is not suitable for Xavier (sm_72)
+# or Thor. 26.02 is the newest -igpu tag — 26.03 through 26.07 have no -igpu
+# variant published — so this trails the x86 image's 26.07 by design.
 #
-# Torch and TensorRT come from the container's system site-packages rather
-# than pip, so the venv is created with --system_site_packages and the
-# conflicting pins are stripped from requirements.txt below.
+# Unlike the x86 Dockerfile, the venv is NOT built here. It is created by
+# run.sh on first container start, on the Jetson itself. That is not an
+# oversight: the container's TensorRT bindings dlopen libnvdla_compiler.so,
+# which ships with the Jetson host driver and is injected by the NVIDIA
+# container runtime. It does not exist on an x86 build host, so anything
+# that imports tensorrt fails during the build — including torch2trt's
+# setup.py, which imports it at module scope. For the same reason there is
+# no build-time import assertion here, unlike the x86 image.
+#
+# run.sh's first-run setup keys off NVIDIA_EMBEDDED (set below): it strips
+# the x86 torch/tensorrt pins from requirements.txt and creates the venv
+# with --system_site_packages, so torch and TensorRT come from this
+# container rather than pip.
 # ===========================================================================
-FROM nvcr.io/nvidia/pytorch:26.02-py3-igpu AS builder
+FROM nvcr.io/nvidia/pytorch:26.02-py3-igpu
 
 WORKDIR /usr/src/wyoming-whisper-trt
 
 COPY . /usr/src/wyoming-whisper-trt
 
-# Make apt resilient to a stalled mirror connection (no timeout => can hang the
-# build for hours); retries + a 30s timeout make it fail fast and recover.
+# python3-venv and git are needed by run.sh's first-run setup, not by this
+# build. ffmpeg is the one runtime package the NGC image lacks, and
+# openai-whisper needs it to load audio. libcuda.so, nvidia-smi and the DLA
+# compiler libraries are injected by the NVIDIA container runtime.
 #
-# The stripped requirements are the ones the container already satisfies or
-# cannot satisfy on Jetson:
-#   torch      - the image ships 2.11.0a0 built for sm_87; the x86 pin
-#                (torch==2.13.0) has no Jetson build.
-#   tensorrt   - requirements pins the CUDA 13 tensorrt_cu13 wheels for TRT
-#                11.2, but this platform is TRT 10.11 on CUDA 12.9. The
-#                python3-libnvinfer bindings in the image provide it instead.
-#   modelopt + - ModelOpt is what inserts the INT8 Q/DQ nodes, and it resolves
-#   its onnx     its own torch/TensorRT expectations. Its torch>=2.8 floor is
-#   deps         now satisfied (it was not on torch 2.5.0a0), so enabling INT8
-#                here is plausible but needs validating on real hardware —
-#                left stripped so this change does not alter what Jetson
-#                supports. float16/float32 build fine without it.
+# Make apt resilient to a stalled mirror connection (no timeout => can hang
+# the build for hours); retries + a 30s timeout make it fail fast and recover.
 RUN printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' > /etc/apt/apt.conf.d/99network-resilience \
     && apt-get update && apt-get install -y --no-install-recommends \
         python3-venv \
         git \
-    && sed -i '/tensorrt/d;/^torch==/d;/nvidia-modelopt/d;/ml_dtypes/d;/polygraphy/d;/onnxslim/d;/lief/d' requirements.txt \
-    && chmod +x ./script/setup \
-    && ./script/setup --system_site_packages \
-    # Trim caches/build leftovers so the copied venv layer stays lean. Only
-    # what this stage created can be trimmed usefully — deleting base-image
-    # content here would not shrink the result, since the base layers still
-    # ship and the whiteout only adds bytes.
-    && find /usr/src/wyoming-whisper-trt/.venv -type d -name __pycache__ -prune -exec rm -rf {} + \
-    && rm -rf /root/.cache/pip /usr/src/wyoming-whisper-trt/.git \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# ===========================================================================
-# Runtime stage: the same base, so the venv's --system_site_packages link to
-# the container's torch/TensorRT stays valid, but without this build's apt and
-# pip residue. ffmpeg is the one runtime package the NGC image lacks, and
-# openai-whisper needs it to load audio. libcuda.so and nvidia-smi are
-# injected by the NVIDIA container runtime.
-#
-# Size note: at ~4.8 GB compressed this is smaller than the ~5.2 GB
-# l4t-jetpack base it replaces, but the figure is dominated by the base
-# itself. Getting materially below that means running on
-# tensorrt:26.02-py3-igpu (~3.0 GB) and copying torch's dist-packages across
-# from this image — same platform stack, so it should work, but it is exactly
-# the kind of surgery that needs a Jetson to verify before shipping.
-# ===========================================================================
-FROM nvcr.io/nvidia/pytorch:26.02-py3-igpu AS runtime
-
-RUN printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' > /etc/apt/apt.conf.d/99network-resilience \
-    && apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Bring over the built application + venv.
-COPY --from=builder /usr/src/wyoming-whisper-trt /usr/src/wyoming-whisper-trt
-
-# Fail the build rather than shipping an image that dies on first start. The
-# venv resolves torch and tensorrt through the base image's site-packages, so
-# a base whose python minor version or CUDA stack does not match the venv
-# surfaces here instead of at container startup.
-# The app is not pip-installed into the venv (script/setup installs
-# requirements + torch2trt only), so wyoming_whisper_trt resolves via the
-# working directory, exactly as run.sh does before launching it.
-RUN cd /usr/src/wyoming-whisper-trt \
-    && ./.venv/bin/python3 -c \
-        "import sys, torch, tensorrt, wyoming_whisper_trt; \
-         print('python', sys.version.split()[0], '/ torch', torch.__version__, \
-               '/ tensorrt', tensorrt.__version__)"
-
-# Jetson must take run.sh's embedded path. The venv is prebuilt above so
-# run.sh's first-run setup is normally skipped, but if a caller mounts over
-# /usr/src/wyoming-whisper-trt the fallback setup must still strip the x86
-# pins rather than installing them over the container's torch/TensorRT.
-# Set here as well as in the compose files so pulling the image cannot get it
-# wrong.
+# Jetson must take run.sh's embedded path. Set it in the image as well as in
+# the compose files so pulling the image directly cannot get it wrong.
 ENV NVIDIA_EMBEDDED=true \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility
