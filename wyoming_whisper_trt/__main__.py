@@ -28,6 +28,7 @@ from whisper_trt import (
     WhisperTRTBuilder,
     auto_workspace_mb,
     get_model_filename,
+    int8_available,
     load_trt_model,
 )
 
@@ -226,19 +227,30 @@ async def run_server(
 def _apply_compute_type(compute_type: str) -> None:
     """Configure the builder for the requested compute type.
 
-    Warns when int8 is selected, since TensorRT is free to ignore the
-    request (implicit quantization is per-layer optional).
+    Warns when int8 is selected, since quantizing costs accuracy that only
+    measurement on the target hardware can quantify, and says so up front when
+    this environment cannot build an int8 engine at all.
     """
     WhisperTRTBuilder.quant_mode = compute_type
     WhisperTRTBuilder.fp16_mode = compute_type == "float16"
     if compute_type == "int8":
+        if not int8_available():
+            # Not fatal: an engine cached from an environment that *did* have
+            # ModelOpt still loads and runs. Only a build needs it.
+            logger.error(
+                "int8 was requested but NVIDIA ModelOpt is unavailable, so no INT8 "
+                "engine can be built here (this is expected on the iGPU/JetPack "
+                "image). Loading a cached int8 engine still works; otherwise use "
+                "COMPUTE_TYPE=float16."
+            )
         logger.warning(
-            "int8 requests TensorRT implicit INT8 quantization for the encoder "
-            "(the decoder always runs FP16), but TensorRT only uses INT8 where "
-            "it beats FP16. Measured on TensorRT 10 (RTX 3050, model 'base') "
-            "the result was identical to float16 — zero INT8 layers, same "
-            "accuracy and VRAM — with a slower engine build. Verify with "
-            "script/layer_report before assuming any benefit."
+            "int8 quantizes the encoder's convolutions and projections to INT8 "
+            "(explicit Q/DQ, calibrated on the bundled speech clips) and runs "
+            "everything else — attention, norms, and the whole decoder — in "
+            "FP16. Unlike float16 this trades accuracy for speed, and the "
+            "engine takes longer to build. Compare WER and latency with "
+            "script/benchmark, and check which layers actually came out INT8 "
+            "with script/layer_report, before running it in production."
         )
 
 

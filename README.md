@@ -173,7 +173,7 @@ docker run \
   -p 10300:10300 \                            # map port 10300 → 10300
   -e MODEL=base \                             # which model to load (tiny, small, base, etc.)
   -e LANGUAGE=auto \                          # default transcription language (`auto` = detect)
-  -e COMPUTE_TYPE=float16 \                   # float16, float32, or int8 (int8 = experimental, encoder-only INT8 + FP16 decoder)
+  -e COMPUTE_TYPE=float16 \                   # float16, float32, or int8 (int8 = experimental, encoder-only INT8 + FP16 decoder, x86 only)
   -e DECODER_MODE=kv \                        # kv (fast, ~1 GB VRAM) or simple (lean, ~200 MB less)
   -e DEVICE=cuda \                            # `cuda` or `cpu`
   captnspdr/wyoming-whisper-trt:latest
@@ -189,7 +189,7 @@ docker run \
   -p 10300:10300 \                            # map port 10300 → 10300
   -e MODEL=base \                             # which model to load (tiny, small, base, etc.)
   -e LANGUAGE=auto \                          # default transcription language (`auto` = detect)
-  -e COMPUTE_TYPE=float16 \                   # float16, float32, or int8 (int8 = experimental, encoder-only INT8 + FP16 decoder)
+  -e COMPUTE_TYPE=float16 \                   # float16 or float32 (int8 needs ModelOpt, unavailable on JetPack)
   -e DECODER_MODE=kv \                        # kv (fast, ~1 GB VRAM) or simple (lean, ~200 MB less)
   -e DEVICE=cuda \                            # `cuda` or `cpu`
   captnspdr/wyoming-whisper-trt:latest-igpu
@@ -298,26 +298,54 @@ GPU-side mel, fewer host syncs); the KV cache itself is the last ~14 %.
 
 #### A note on `int8`
 
-`COMPUTE_TYPE=int8` requests TensorRT *implicit* INT8 quantization for the
-encoder (the decoder always stays FP16). Implicit quantization is per-layer
-optional — TensorRT only uses INT8 where it times faster than FP16 — and it
-is deprecated in TensorRT 10. Measured with the tools above (default `kv`
-decoder):
+`COMPUTE_TYPE=int8` quantizes the audio encoder's convolutions and matmuls to
+INT8 and leaves everything else — layer norms, softmax, and the whole text
+decoder — in FP16. Quantization is *explicit*: after the encoder is exported to
+ONNX, [NVIDIA ModelOpt](https://github.com/NVIDIA/TensorRT-Model-Optimizer)
+rewrites the graph with Q/DQ pairs whose activation ranges were calibrated on
+real speech mels — from the clips bundled in `whisper_trt/calibration/`, so add
+your own 16 kHz mono WAVs there to widen acoustic coverage — and casts the
+unquantized remainder to FP16 in the same pass. Graph inputs and outputs stay
+FP32, so nothing changes at the runtime boundary.
 
-| `base`, 300 utterances (RTX 3050, TensorRT 10) | float16 | int8 |
+Calibration replays the graph through onnxruntime on the **CPU** (the image
+ships CPU-only onnxruntime), so an int8 build is slower than a float16 one by
+roughly one CPU encoder pass per clip — noticeable on `medium`/`large`.
+
+Explicit quantization is the only kind TensorRT 11 supports — implicit
+quantization, where the builder ran a calibrator and then used INT8 only where
+it timed faster than FP16, was removed. That removal also fixed the old
+surprise on TensorRT 10: an int8 build could come out with *zero* INT8 layers,
+byte-for-byte equivalent to float16, because no INT8 tactic won on timing.
+Q/DQ pairs are honoured regardless of tactic timings, so INT8 now actually
+takes.
+
+`int8` is x86/dGPU only. The iGPU (Jetson) image runs against JetPack's own
+TensorRT and PyTorch, which are too old for ModelOpt, so it installs without it
+and `COMPUTE_TYPE=int8` fails there with an explanatory error — use `float16`.
+
+It is still a speed/accuracy trade rather than a free win, and it has not been
+re-measured on the explicit path — INT8 activations cost accuracy that only
+your own audio can quantify, and small encoders may not be FLOP-bound enough
+to gain. Before running it in production, measure on your hardware:
+
+```bash
+./script/benchmark --model base --compute-type float16 int8 \
+    --eval-dir ./eval --data-dir ./local --detailed-build --force-rebuild
+./script/layer_report --model base --compute-type int8 --data-dir ./local
+```
+
+For reference, the numbers that motivated the change (`base`, 300 utterances,
+RTX 3050, TensorRT 10, implicit quantization) — the int8 column is what
+explicit Q/DQ replaces:
+
+| `base`, 300 utterances (RTX 3050, TensorRT 10) | float16 | int8 (implicit) |
 |---|---|---|
 | WER | 5.37 % | 5.37 % |
 | Latency p95 | 0.124 s | 0.124 s |
 | VRAM (nvidia-smi) | 1032 MiB | 1032 MiB |
 | Encoder engine size | 40.0 MiB | 40.2 MiB |
 | INT8 layers in engine | — | 0 of 105 |
-
-In other words: on this hardware the int8 engine is identical to float16 and
-just takes longer to build (WER differences are within run-to-run noise).
-Other GPU/TensorRT combinations may behave differently — run
-`script/layer_report` on your own hardware before assuming any benefit.
-Guaranteed quantization would require explicit Q/DQ (e.g. via
-nvidia-modelopt), which only pays off on `medium`/`large` encoders.
 
 #### Silence hallucination suppression
 
