@@ -49,7 +49,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@28f2168f4d98ee0445e3c6321f6e6616c83dd5ec
         with:
-          python-version: '3.13'  # Use a stable version
+          python-version: '3.14'  # Use a stable version
 
       # CUDA toolkit IS required here: torch2trt/setup.py builds a CUDAExtension
       # ('plugins') via nvcc, which needs CUDA_HOME. (glados can drop it because
