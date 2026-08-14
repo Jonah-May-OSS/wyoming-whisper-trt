@@ -40,18 +40,32 @@ def _trt_version(version: str):
     return patch("whisper_trt.model.tensorrt.__version__", version)
 
 
+def _tag_for(version: str) -> str:
+    with _trt_version(version):
+        return get_trt_version_tag()
+
+
 class TestTrtVersionTag:
-    """``get_trt_version_tag`` keys the cache on the TensorRT major version."""
+    """``get_trt_version_tag`` keys the cache on the exact TensorRT version."""
 
-    def test_reports_the_major_version(self) -> None:
+    def test_reports_the_full_version(self) -> None:
         with _trt_version("11.2.1.2"):
-            assert get_trt_version_tag() == "trt11"
+            assert get_trt_version_tag() == "trt11_2_1_2"
 
-    def test_minor_upgrades_share_a_tag(self) -> None:
-        with _trt_version("11.0.0.114"):
-            first = get_trt_version_tag()
-        with _trt_version("11.2.1.2"):
-            assert get_trt_version_tag() == first
+    def test_distinct_releases_never_share_a_tag(self) -> None:
+        """Engines are not VERSION_COMPATIBLE, so even a patch bump needs its own
+        plan: 11.2.1 cannot deserialize what 11.0.0 built."""
+        tags = {
+            _tag_for(version)
+            for version in ("11.0.0.114", "11.1.0.106", "11.2.1.2", "10.16.1.11")
+        }
+        assert len(tags) == 4
+
+    def test_suffixed_versions_stay_filename_safe(self) -> None:
+        """Post/dev releases reach the filename with no dots or plus signs."""
+        tag = _tag_for("10.7.0.post1")
+        assert tag == "trt10_7_0_post1"
+        assert tag.replace("_", "").isalnum()
 
 
 class TestDeviceArchTag:
@@ -85,19 +99,21 @@ class TestArchKeyedFilename:
                 get_model_filename(
                     "base.en", "float16", decoder_mode="kv", max_workspace_mb=1024
                 )
-                == "base_en_trt_float16_kv4_ws1024_sm86_trt11.pth"
+                == "base_en_trt_float16_kv4_ws1024_sm86_trt11_2_1_2.pth"
             )
 
-    def test_different_trt_majors_never_share_a_filename(self) -> None:
-        """A TensorRT 10 plan must not be handed to TensorRT 11, which cannot load it."""
+    def test_different_trt_versions_never_share_a_filename(self) -> None:
+        """A plan must never be handed to a TensorRT build that cannot load it."""
         args = ("base.en", "float16")
         kwargs = {"decoder_mode": "kv", "max_workspace_mb": 1024}
         with _cuda_available(True), _capability(8, 6):
-            with _trt_version("10.16.1.11"):
-                on_trt10 = get_model_filename(*args, **kwargs)
+            with _trt_version("11.0.0.114"):
+                on_11_0 = get_model_filename(*args, **kwargs)
             with _trt_version("11.2.1.2"):
-                on_trt11 = get_model_filename(*args, **kwargs)
-        assert on_trt10 != on_trt11
+                on_11_2 = get_model_filename(*args, **kwargs)
+            with _trt_version("10.16.1.11"):
+                on_10 = get_model_filename(*args, **kwargs)
+        assert len({on_11_0, on_11_2, on_10}) == 3
 
     def test_different_archs_never_share_a_filename(self) -> None:
         """The regression: an sm_86 plan must not be picked up on an sm_89 GPU."""

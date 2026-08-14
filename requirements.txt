@@ -6,8 +6,10 @@ tensorrt_cu13_libs~=11.2.1.2
 tensorrt~=11.2.1.2
 # TensorRT 11 removed weak typing: the FP16/INT8 builder flags are gone and
 # precision has to be expressed in the ONNX graph handed to the parser. ModelOpt
-# does both halves of that — AutoCast rewrites the graph to FP16, and its torch
-# quantizers bake INT8 Q/DQ pairs into the encoder (see whisper_trt/_quant.py).
+# rewrites the graph for both — AutoCast casts an FP32 graph to FP16, and the
+# ONNX quantizer inserts INT8 Q/DQ (casting the remainder to FP16 in the same
+# pass). Both run inside torch2trt's ONNX export path; whisper_trt/_quant.py
+# only reports whether they are importable.
 nvidia-modelopt~=0.45.0
 # ModelOpt's ONNX subpackage imports these eagerly but only declares them under
 # its heavyweight [onnx] extra, which would also drag in cupy and
@@ -16,6 +18,10 @@ ml_dtypes~=0.5.4
 polygraphy~=0.53.4
 onnxslim~=0.1.95
 lief~=1.0.0
+# Deliberately ahead of the onnx~=1.21 that ModelOpt's [onnx] extra asks for:
+# that extra is not installed (see above), nothing else here constrains onnx,
+# and the ONNX rewrites ModelOpt performs are covered against the installed
+# version by tests/test_quant.py. Revisit the pin if those start failing.
 onnx~=1.22.0
 onnxscript~=0.7.0
 onnx-graphsurgeon==0.6.1

@@ -32,6 +32,7 @@ import gc
 import importlib.resources
 import logging
 import os
+import re
 import time
 import wave
 from collections.abc import Callable
@@ -116,15 +117,15 @@ def get_device_arch_tag() -> str:
 
 
 def get_trt_version_tag() -> str:
-    """Return a cache tag for the TensorRT major version in use.
+    """Return a cache tag for the exact TensorRT version in use.
 
-    A serialized plan is only loadable by the TensorRT major version that built
-    it, and 11 changed how precision is expressed (strong typing, explicit
-    quantization) so its engines differ from a 10.x plan even for identical
-    settings. Keying the filename on the major version means a TensorRT upgrade
-    quietly builds a new engine instead of failing to deserialize the old one.
+    Engines are built without ``VERSION_COMPATIBLE``, so a plan is loadable only
+    by the TensorRT build that produced it — not merely the same major version.
+    The full version therefore goes in the filename, so any upgrade (including a
+    patch) quietly builds a new engine instead of failing to deserialize the old
+    one. Non-alphanumerics become underscores to keep the filename plain.
     """
-    return "trt" + str(tensorrt.__version__).split(".", maxsplit=1)[0]
+    return "trt" + re.sub(r"[^0-9A-Za-z]+", "_", str(tensorrt.__version__))
 
 
 def _load_engine_module(engine_state: dict[str, Any], what: str) -> Any:
@@ -1444,8 +1445,9 @@ def get_model_filename(
     serialized layout no longer matches the loader, the ``sm<cc>`` tag keeps
     a plan built on one compute capability from being loaded on another (TRT
     deserialize "incompatible device" error 6) even when several machines share
-    one cache directory, and the ``trt<major>`` tag does the same across
-    TensorRT major versions, whose plans are never interchangeable.
+    one cache directory, and the ``trt<version>`` tag does the same across
+    TensorRT builds, whose plans are only loadable by the exact version that
+    produced them.
 
     Args:
         name (str): The model name (e.g. "tiny", "base.en").
@@ -1457,8 +1459,8 @@ def get_model_filename(
 
     Returns:
         str: Filename with the quant mode, schema, workspace, GPU architecture,
-            and TensorRT major version embedded
-            (e.g. "tiny_trt_float16_kv4_ws1024_sm89_trt11.pth").
+            and TensorRT version embedded
+            (e.g. "tiny_trt_float16_kv4_ws1024_sm89_trt11_2_1_2.pth").
 
     Raises:
         RuntimeError: If ``name`` is not a recognised model name or if

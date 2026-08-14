@@ -43,10 +43,11 @@ fi
 # must never be loaded on another (TRT deserialize "incompatible device" Error
 # 6) if the container is rescheduled onto a different GPU. The compute
 # capability of the device torch actually selects is baked into the cached
-# engine filename (e.g. base_en_trt_float16_kv4_ws1024_sm86_trt11.pth), so a
-# single data dir is safe to share across GPUs — no directory keying needed
-# here. The trailing tag is the TensorRT major version, whose plans are just as
-# non-interchangeable, so upgrading TensorRT builds a new engine instead of
+# engine filename (e.g. base_en_trt_float16_kv4_ws1024_sm86_trt11_2_1_2.pth),
+# so a single data dir is safe to share across GPUs — no directory keying needed
+# here. The trailing tag is the TensorRT version, whose plans are just as
+# non-interchangeable (engines are not built VERSION_COMPATIBLE, so even a patch
+# bump needs its own plan), so upgrading TensorRT builds a new engine instead of
 # failing to load the old one.
 ENGINE_DATA_DIR="${DATA_DIR:-/data}"
 mkdir -p "$ENGINE_DATA_DIR"

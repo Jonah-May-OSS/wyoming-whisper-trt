@@ -134,6 +134,7 @@ class TestOnnxInt8Quantization:
     """The rewritten graph is INT8, optionally FP16, and valid."""
 
     def test_inserts_qdq_pairs(self, tmp_path) -> None:
+        """The rewrite is what puts INT8 in the graph; the export has none."""
         src = _export(_MiniEncoder().eval(), tmp_path / "model.onnx")
         assert "QuantizeLinear" not in _ops(onnx.load(src))
 
@@ -152,6 +153,7 @@ class TestOnnxInt8Quantization:
         onnx.checker.check_model(model, full_check=True)
 
     def test_int8_without_fp16_is_a_valid_graph(self, tmp_path) -> None:
+        """INT8 alone (float32 elsewhere) has to hold up the same way."""
         src = _export(_MiniEncoder().eval(), tmp_path / "model.onnx")
         model = _quantize(src, str(tmp_path / "int8.onnx"), fp16=False)
         onnx.checker.check_model(model, full_check=True)
@@ -175,6 +177,8 @@ class TestCalibrationArrays:
     """Calibration data is handed over in the layout ModelOpt expects."""
 
     def test_rejects_a_mismatched_item(self) -> None:
+        """A calibration item that does not match the model's inputs is caught
+        here rather than as an opaque failure inside the quantizer."""
         calibration = _calibration_set(1)
         flattener = _t2t("flattener").Flattener.from_value(calibration[0])
         with pytest.raises(ValueError, match="takes 3 inputs"):
@@ -183,6 +187,8 @@ class TestCalibrationArrays:
             )
 
     def test_concatenates_along_the_batch_axis(self) -> None:
+        """Every input is stacked the same number of times, which is how the
+        data reader derives its iteration count."""
         calibration = _calibration_set(3)
         flattener = _t2t("flattener").Flattener.from_value(calibration[0])
         arrays = _t2t("precision").calibration_arrays(
