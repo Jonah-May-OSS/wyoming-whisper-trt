@@ -71,4 +71,4 @@ jobs:
         with:
           token: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
           repository: ${{ github.repository }}
-          milestone: ${{ github.ref_name }}
+          milestone: ${{ env.VERSION }}
