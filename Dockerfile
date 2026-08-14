@@ -36,9 +36,18 @@ RUN printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https:
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ===========================================================================
-# Runtime stage: slim Ubuntu (matches the NGC base's Ubuntu 24.04 / glibc /
-# python3.12, so the --copies venv relocates cleanly). On top of the venv we
-# need: the Python stdlib, ffmpeg (audio loading), libgomp (torch OpenMP), and
+# Runtime stage: slim Ubuntu. This tag is NOT a free-floating dependency — it
+# must stay on the same Ubuntu release as the NGC builder above (26.04 /
+# python3.14). script/setup builds the venv with venv's POSIX default of
+# symlinks, so the .venv copied in below points at the builder's interpreter
+# path: a runtime without that exact python3.X gets a dangling symlink, and a
+# different minor version can't load the cp3XX wheels in site-packages either.
+# The verification step after the COPY below asserts this at build time rather
+# than letting it surface as a broken container at run time. Bumping this in
+# step with the NGC base is a deliberate, tested change.
+#
+# On top of the venv we need: the Python stdlib, ffmpeg (audio loading),
+# libgomp (torch OpenMP), and
 # ca-certificates (TLS trust store — the model is downloaded over HTTPS on
 # first run; without it that fetch fails with CERTIFICATE_VERIFY_FAILED —
 # unlike the NGC base, plain ubuntu ships no CA bundle). libcuda.so and
@@ -50,7 +59,7 @@ FROM ubuntu:26.04 AS runtime
 RUN printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' > /etc/apt/apt.conf.d/99network-resilience \
     && apt-get update && apt-get install -y --no-install-recommends \
         python3 \
-        python3.12 \
+        python3.14 \
         ffmpeg \
         libgomp1 \
         ca-certificates \
@@ -64,6 +73,19 @@ ENV NVIDIA_VISIBLE_DEVICES=all \
 
 # Bring over the built application + self-contained venv.
 COPY --from=builder /usr/src/wyoming-whisper-trt /usr/src/wyoming-whisper-trt
+
+# Assert the relocated venv actually runs on this base. The venv's interpreter
+# is a symlink back to the builder's python, and site-packages holds cp3XX
+# wheels, so a runtime whose python minor version differs from the builder's
+# produces an image that only fails when a container starts. Catch it here.
+RUN set -eu; \
+    py=/usr/src/wyoming-whisper-trt/.venv/bin/python3; \
+    if ! "$py" -c 'import sys; print("venv python:", sys.version)'; then \
+        echo "ERROR: the venv interpreter does not run on this runtime base." >&2; \
+        echo "The runtime python minor version must match the NGC builder's." >&2; \
+        exit 1; \
+    fi; \
+    "$py" -c 'import torch, wyoming_whisper_trt'
 
 WORKDIR /
 COPY ./run.sh ./
