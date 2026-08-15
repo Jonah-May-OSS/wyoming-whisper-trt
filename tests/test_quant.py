@@ -63,7 +63,9 @@ def _t2t_core() -> ModuleType:
     except ImportError:
         pass
     sys.path.insert(0, str(_T2T_DIR.parent))
-    for name in [n for n in sys.modules if n == "torch2trt" or n.startswith("torch2trt.")]:
+    for name in [
+        n for n in sys.modules if n == "torch2trt" or n.startswith("torch2trt.")
+    ]:
         del sys.modules[name]
     return importlib.import_module("torch2trt.torch2trt")
 
