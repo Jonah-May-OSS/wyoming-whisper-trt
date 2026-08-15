@@ -43,6 +43,23 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@21162887f0d6e25b4e8eafb0cf44cf9bf7f6acd3
+        with:
+          # Route image pulls through the lab's pull-through registry caches.
+          # LAN-only mirrors; buildkit falls back to the upstream registry if
+          # a mirror is unreachable (e.g. on a GitHub-hosted runner).
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["192.168.7.45:5000"]
+            [registry."192.168.7.45:5000"]
+              http = true
+            [registry."ghcr.io"]
+              mirrors = ["192.168.7.45:5001"]
+            [registry."192.168.7.45:5001"]
+              http = true
+            [registry."nvcr.io"]
+              mirrors = ["192.168.7.45:5004"]
+            [registry."192.168.7.45:5004"]
+              http = true
 
       - name: Log in to Docker Hub
         uses: docker/login-action@ba754150c9dbbaa912ae0ac3cfba43f84195cef2
