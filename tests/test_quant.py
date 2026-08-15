@@ -50,6 +50,24 @@ def _t2t(name: str) -> ModuleType:
     return sys.modules[key]
 
 
+def _t2t_core() -> ModuleType:
+    """Import torch2trt's conversion module, falling back to the checkout.
+
+    Unlike the modules above this one is only importable as part of the
+    ``torch2trt`` package (its siblings import each other absolutely), and the
+    checkout's outer directory shadows that package name from the repo root. The
+    fallback puts the inner directory first on the path so the real package wins.
+    """
+    try:
+        return importlib.import_module("torch2trt.torch2trt")
+    except ImportError:
+        pass
+    sys.path.insert(0, str(_T2T_DIR.parent))
+    for name in [n for n in sys.modules if n == "torch2trt" or n.startswith("torch2trt.")]:
+        del sys.modules[name]
+    return importlib.import_module("torch2trt.torch2trt")
+
+
 pytestmark = pytest.mark.skipif(
     not int8_available(), reason="nvidia-modelopt is not installed"
 )
@@ -171,6 +189,65 @@ class TestOnnxInt8Quantization:
         onnx.checker.check_model(model, full_check=True)
         assert _ops(model)["Cast"] > 0
         assert _elem_types(model) == {onnx.TensorProto.FLOAT}
+
+
+class TestOversizedGraphFp16:
+    """FP16 on a graph whose weights have to spill into an external data file.
+
+    The large family's audio encoder is ~2.5 GB in FP32, over protobuf's 2 GiB
+    serialization limit, so it is saved with its weights in a sidecar next to the
+    model. That save rewrites the proto in place — the initializers come back as
+    a reference resolved relative to the model file — so the order the graph is
+    saved and cast in decides whether AutoCast gets a usable model. Forced on a
+    miniature graph here by lowering the size threshold; the real trigger needs
+    a 2 GB export.
+    """
+
+    @pytest.fixture
+    def core(self, monkeypatch):
+        """torch2trt's conversion module, with every graph counting as oversized."""
+        module = _t2t_core()
+        monkeypatch.setattr(module, "_PROTO_SIZE_LIMIT", 0)
+        monkeypatch.setattr(module, "_PROTO_SIZE_MARGIN", 0)
+        return module
+
+    def test_save_spends_the_proto(self, core, tmp_path) -> None:
+        """The mutation the ordering has to work around: after an external-data
+        save the proto no longer carries its weights, only a relative reference
+        that its consumer has to resolve from the model's directory."""
+        model = onnx.load(_export(_MiniEncoder().eval(), tmp_path / "model.onnx"))
+        assert core.save_onnx(onnx, model, str(tmp_path / "model_out.onnx")) is True
+
+        externalized = [
+            init
+            for init in model.graph.initializer
+            if init.data_location == onnx.TensorProto.EXTERNAL
+        ]
+        assert externalized
+        assert not any(init.raw_data for init in externalized)
+
+    def test_autocast_precedes_the_save(self, core, tmp_path, monkeypatch) -> None:
+        """The regression: torch2trt saved the graph before casting it, and
+        AutoCast's onnx.checker call resolves external data against the process
+        CWD rather than the model's directory, so it could not find the sidecar
+        ("... should be stored in model_out.onnx.data, but it is not regular
+        file"). Casting first hands AutoCast a graph that still has its weights.
+        """
+        src = _export(_MiniEncoder().eval(), tmp_path / "model.onnx")
+        out_dir = tmp_path / "build"
+        out_dir.mkdir()
+        elsewhere = tmp_path / "cwd"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+
+        model = _t2t("precision").autocast_onnx_to_fp16(onnx.load(src))
+        out_path = str(out_dir / "model_out.onnx")
+        assert core.save_onnx(onnx, model, out_path) is True
+
+        # Saved this way the graph is only parseable from its path, which is how
+        # torch2trt hands it to TensorRT's OnnxParser.
+        onnx.checker.check_model(out_path, full_check=True)
+        assert _ops(onnx.load(out_path))["Cast"] > 0
 
 
 class TestCalibrationArrays:
