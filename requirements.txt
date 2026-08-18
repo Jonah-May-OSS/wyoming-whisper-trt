@@ -29,5 +29,5 @@ onnx-graphsurgeon==0.6.1
 # evaluates constant subgraphs through onnxruntime (CPUExecutionProvider only,
 # so the GPU build would be pure image bloat). Without it every torch2trt
 # conversion logs "No module named 'onnxruntime'" and silently skips folding.
-onnxruntime~=1.28.0
+onnxruntime~=1.29.0
 torch==2.13.0
