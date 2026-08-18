@@ -112,7 +112,10 @@ def _new_shared_device_memory() -> Any:
             "private device-memory pool."
         )
         return None
-    return pool_cls()
+    # Instantiated through the typed helper, as with TRTModule above: a class
+    # resolved by getattr is untyped, and calling it directly is what pylint
+    # flags as not-callable.
+    return _instantiate_type(pool_cls)
 
 
 class IncompatibleEngineError(RuntimeError):
