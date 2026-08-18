@@ -106,13 +106,21 @@ model choice and decoder mode are the levers that actually move VRAM.
 3. Enable Docker's containerd image store. The published images use zstd-compressed
    layers, which the classic image store cannot pull -- if you see an error like
    `unsupported media type application/vnd.oci.image.layer.v1.tar+zstd`, this is why.
-   Add the following to `/etc/docker/daemon.json` and restart the daemon:
+   Merge the following into your existing `/etc/docker/daemon.json` (or create it if
+   it doesn't exist) and restart the daemon:
    ```json
-   { "features": { "containerd-snapshotter": true } }
+   {
+     "features": {
+       "containerd-snapshotter": true
+     }
+   }
    ```
-   Docker Desktop 4.34+ has this on by default; on Linux Docker Engine it is still
-   opt-in. Requires Docker 23 or newer (JetPack 5 ships Docker 20.10, which cannot
-   pull these images -- build locally from the Dockerfile instead).
+   If you already have other keys in `daemon.json` or other settings under `"features"`,
+   add `"containerd-snapshotter": true` to the existing `"features"` object rather than
+   replacing it. Docker Desktop 4.34+ and fresh installs of Docker Engine 29+ have this
+   enabled by default; upgraded Docker Engine installations still need to opt in manually.
+   Requires Docker 23 or newer (JetPack 5 ships Docker 20.10, which cannot pull these
+   images -- build locally from the Dockerfile instead).
 
 ### Docker Compose (recommended)
 For discrete GPUs (AMD64 or ARM64):
