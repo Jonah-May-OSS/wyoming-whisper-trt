@@ -45,8 +45,11 @@ def _trt_module() -> ModuleType:
 
 try:
     SharedDeviceMemory = _trt_module().SharedDeviceMemory
-except ImportError as err:  # pragma: no cover - environment dependent
-    pytest.skip(f"torch2trt is unavailable: {err}", allow_module_level=True)
+except (ImportError, AttributeError) as err:  # pragma: no cover - env dependent
+    # AttributeError, not just ImportError: the loader is documented to fall back
+    # to private pools on a torch2trt that predates SharedDeviceMemory, so that
+    # combination has to skip here rather than error out during collection.
+    pytest.skip(f"SharedDeviceMemory is unavailable: {err}", allow_module_level=True)
 
 
 class _FakeContext:
