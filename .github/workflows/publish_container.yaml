@@ -101,10 +101,20 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/amd64,linux/arm64
+          # zstd layers instead of the default gzip: smaller blobs and much
+          # faster decompression on pull. `push` moves in here because it and
+          # `outputs` are mutually exclusive, and force-compression is required
+          # or unchanged layers keep their existing gzip blobs.
+          #
+          # NOTE: this emits OCI `...tar+zstd` layer media types, which the
+          # classic Docker image store cannot pull. Consumers need either
+          # containerd/podman, or Docker with the containerd snapshotter
+          # enabled (`{"features": {"containerd-snapshotter": true}}` in
+          # /etc/docker/daemon.json) -- still opt-in on Linux Docker Engine.
+          outputs: type=image,push=true,compression=zstd,compression-level=3,force-compression=true
 
       - name: Build and Push ARM64 iGPU Image
         id: push-arm64-igpu
@@ -112,7 +122,8 @@ jobs:
         with:
           context: .
           file: ./Dockerfile.igpu
-          push: true
           tags: ${{ steps.prepare-igpu-tags.outputs.igpu_tags }}
           labels: ${{ steps.meta.outputs.labels }}-igpu
           platforms: linux/arm64
+          # zstd layers; see the note on the dGPU step above.
+          outputs: type=image,push=true,compression=zstd,compression-level=3,force-compression=true
