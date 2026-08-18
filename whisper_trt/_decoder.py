@@ -277,7 +277,7 @@ class TextDecoderTRTKV(nn.Module):
         last_hidden, self_kv = self.engines.prefill(hidden_in, cross_kv, mask)
         last_hidden = self.ln(last_hidden)
         weight = self.token_embedding.weight.to(device)
-        logits = (last_hidden @ torch.transpose(weight, 0, 1)).float()
+        logits = (last_hidden.to(weight.dtype) @ torch.transpose(weight, 0, 1)).float()
         return logits, self_kv
 
     @torch.no_grad()
@@ -296,7 +296,7 @@ class TextDecoderTRTKV(nn.Module):
         hidden, new_self_kv = self.engines.step(hidden_in, self_kv, cross_kv)
         hidden = self.ln(hidden)[:, -1:, :]
         weight = self.token_embedding.weight.to(device)
-        logits = (hidden @ torch.transpose(weight, 0, 1)).float()
+        logits = (hidden.to(weight.dtype) @ torch.transpose(weight, 0, 1)).float()
         return logits, new_self_kv
 
     def forward(self, *args: Any, **kwargs: Any) -> Any:
@@ -361,7 +361,7 @@ class TextDecoderTRT(nn.Module):
         hidden = self.engine(hidden, xa, cast(Tensor, self.mask).to(xa.device))
         hidden = self.ln(hidden)[:, -1:, :]
         weight = self.token_embedding.weight.to(hidden.device)
-        return (hidden @ torch.transpose(weight, 0, 1)).float()
+        return (hidden.to(weight.dtype) @ torch.transpose(weight, 0, 1)).float()
 
     def summary(self) -> str:
         """Return a short human-readable component summary."""
