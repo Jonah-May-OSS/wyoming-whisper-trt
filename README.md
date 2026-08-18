@@ -100,6 +100,19 @@ Most of the runtime footprint is the fixed CUDA/cuDNN context rather than the
 model weights (the TensorRT engines for `base` total only tens of MiB), so
 model choice and decoder mode are the levers that actually move VRAM.
 
+Note that `--max-workspace-mb` is **not** one of those levers: it caps the
+scratch TensorRT may use while *searching tactics during the build*, and has no
+effect on what a loaded engine reserves. Lowering it to save VRAM only risks
+worse tactics and a rebuild.
+
+The large family (`large`, `large-v2`, `large-v3`, `large-v3-turbo`) is a
+different proposition from `base`, and the ratios above do not carry over. Its
+weights dominate, and in the default `kv` mode the decoder is three engines that
+each carry their own copy of the decoder weights — so resident VRAM lands at
+several times the FP16 weight size, which is tight next to another GPU tenant on
+a 16 GB card. If you are sharing the GPU with an LLM, `DECODER_MODE=simple` is
+the one lever that removes weight copies rather than merely scratch.
+
 ### Pre-requisites:
 1. Install and configure Docker
 2. Install and configure the [Nvidia Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
@@ -295,7 +308,15 @@ so its implementation drives latency. Two are available:
   projects cross-attention K/V once per utterance, across three TensorRT
   engines. Fastest.
 - **`simple`**: a single engine that recomputes the whole token prefix each
-  step. One engine context instead of three, so it uses less VRAM.
+  step. One engine instead of three — one set of decoder weights rather than
+  three — so it uses less VRAM.
+
+Engine *scratch* is no longer part of that difference: all of a checkpoint's
+engines now share a single device-memory pool sized to the largest of them,
+since they only ever run one at a time. What `simple` still saves is the
+duplicated decoder weights, which is what matters on the large family. The
+figures in the table below were measured before pooling and so overstate the
+`kv` side.
 
 Measured on `base`, 300 utterances, float16 (RTX 3050, TensorRT 10):
 
