@@ -83,8 +83,15 @@ def _new_trt_module(device_memory: Any = None) -> Any:
     ``device_memory`` is an optional ``SharedDeviceMemory`` pool the module's
     execution context should draw its scratch from; ``None`` keeps torch2trt's
     default of a private pool per context.
+
+    The keyword is omitted entirely when there is no pool: a torch2trt predating
+    ``SharedDeviceMemory`` has no such parameter, and passing it would raise
+    TypeError on exactly the path that is supposed to degrade quietly.
     """
-    return _instantiate_type(_trt_module_class(), device_memory=device_memory)
+    module_cls = _trt_module_class()
+    if device_memory is None:
+        return _instantiate_type(module_cls)
+    return _instantiate_type(module_cls, device_memory=device_memory)
 
 
 def _instantiate_type(class_type: type[Any], **kwargs: Any) -> Any:
@@ -1361,7 +1368,11 @@ class WhisperTRTBuilder:
         # or a host-side serialized plan. Letting torch restore them onto the
         # GPU only to have the engines' own device allocations land on top of
         # them raises the load-time peak for nothing.
-        checkpoint = torch.load(trt_model_path, map_location="cpu")
+        # weights_only=True: a checkpoint is an untrusted file on disk, and
+        # unrestricted unpickling would execute whatever it carries. Everything
+        # these hold survives the restricted unpickler -- tensors, dicts,
+        # OrderedDicts, primitives, and the bytearray TensorRT plans.
+        checkpoint = torch.load(trt_model_path, map_location="cpu", weights_only=True)
         dims = ModelDimensions(**checkpoint["dims"])
         # One scratch pool for every engine in this checkpoint. The pool is
         # referenced by each TRTModule, so it stays alive as long as the
