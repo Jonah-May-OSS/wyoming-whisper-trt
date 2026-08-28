@@ -7,7 +7,7 @@
 # build tooling — are needed only to build and are NOT carried into the
 # runtime image.
 # ===========================================================================
-FROM nvcr.io/nvidia/tensorrt:26.07-py3 AS builder
+FROM nvcr.io/nvidia/tensorrt:26.08-py3 AS builder
 
 WORKDIR /usr/src/wyoming-whisper-trt
 
