@@ -122,6 +122,31 @@ model choice and decoder mode are the levers that actually move VRAM.
    Requires Docker 23 or newer (JetPack 5 ships Docker 20.10, which cannot pull these
    images -- build locally from the Dockerfile instead).
 
+### Which image for a Jetson?
+
+| JetPack | Image |
+|---|---|
+| 6.x (L4T r36) | `captnspdr/wyoming-whisper-trt:latest-igpu` |
+| 7.2+ (L4T r39.2) | `captnspdr/wyoming-whisper-trt:latest` (the standard ARM64 image) |
+
+JetPack 7.2 aligns Orin with the SBSA baseline, so a Jetson on r39.2 runs
+mainstream ARM64 containers directly and the `-igpu` tag is no longer needed --
+follow the discrete-GPU instructions below and use the plain `latest` tag.
+(JetPack 7.2 is the first 7.x release covering the Orin family; 7.0 and 7.1 are
+Thor-only.)
+
+The `-igpu` image is JetPack 6 only. Running it on JetPack 7 loops on startup
+with:
+
+```
+ImportError: libnvdla_compiler.so: cannot open shared object file: No such file or directory
+```
+
+That library was dropped in JetPack 7 and cannot be installed; the fix is the
+standard image, not a workaround. The JetPack 7 path is untested here (I have no
+Jetson) -- reports welcome on
+[#1038](https://github.com/Jonah-May-OSS/wyoming-whisper-trt/issues/1038).
+
 ### Docker Compose (recommended)
 For discrete GPUs (AMD64 or ARM64):
 ```
@@ -151,7 +176,8 @@ services:
               capabilities: [gpu]
 ```
 
-For ARM64 with an iGPU like Jetson devices:
+For ARM64 with an iGPU like Jetson devices (JetPack 6 only -- see
+[Which image for a Jetson?](#which-image-for-a-jetson)):
 ```
 services:
   wyoming-whisper-trt:
@@ -197,7 +223,8 @@ docker run \
   captnspdr/wyoming-whisper-trt:latest
 ```
 
-For ARM64 with iGPU:
+For ARM64 with iGPU (JetPack 6 only -- see
+[Which image for a Jetson?](#which-image-for-a-jetson)):
 
 ```bash
 docker run \
