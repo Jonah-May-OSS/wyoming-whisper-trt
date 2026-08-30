@@ -425,6 +425,7 @@ async def main() -> None:
     # Resolve the build-time workspace budget. When unset, pick one from the
     # model size and free VRAM (more generous for large models); an explicit
     # --max-workspace-mb always wins. Does not control runtime VRAM.
+    WhisperTRTBuilder.max_workspace_explicit = args.max_workspace_mb is not None
     if args.max_workspace_mb is None:
         args.max_workspace_mb = auto_workspace_mb(model_name)
         logger.debug("Auto-selected TensorRT workspace: %d MiB.", args.max_workspace_mb)
