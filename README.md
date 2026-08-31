@@ -143,9 +143,13 @@ ImportError: libnvdla_compiler.so: cannot open shared object file: No such file 
 ```
 
 That library was dropped in JetPack 7 and cannot be installed; the fix is the
-standard image, not a workaround. The JetPack 7 path is untested here (I have no
-Jetson) -- reports welcome on
-[#1038](https://github.com/Jonah-May-OSS/wyoming-whisper-trt/issues/1038).
+standard image, not a workaround.
+
+The JetPack 7 path is confirmed working on an Orin Nano 8 GB (JetPack 7.2,
+L4T R39.2.0): CUDA is available, the engine builds, and transcription is
+TensorRT-accelerated. Torch prints one harmless warning at startup about the
+GPU's compute capability (`sm_87`) not being in its published build list --
+CUDA runs `sm_80` code on any 8.x GPU, so this costs nothing.
 
 ### Docker Compose (recommended)
 For discrete GPUs (AMD64 or ARM64):
