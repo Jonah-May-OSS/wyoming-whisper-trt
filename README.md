@@ -89,7 +89,9 @@ environment:
   model only if you see it mis-hearing commands.
 - **`DECODER_MODE=simple`** — the single-engine decoder. Measured (`base`, RTX
   3050) at **834 MiB vs 1032 MiB** for the default `kv` mode — ~200 MiB less
-  VRAM — for ~14% higher latency. A good trade on tight-VRAM devices. See
+  VRAM — for ~14% higher latency. A good trade on tight-VRAM devices. Every VRAM
+  figure in this README predates engine-scratch pooling and so overstates the
+  `kv` side; see
   [Decoder modes](#decoder-modes---decoder-mode-env-decoder_mode).
 - **`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`** — an optional, low-risk
   allocator setting that can reduce reserved-but-unused VRAM from
@@ -100,12 +102,26 @@ Most of the runtime footprint is the fixed CUDA/cuDNN context rather than the
 model weights (the TensorRT engines for `base` total only tens of MiB), so
 model choice and decoder mode are the levers that actually move VRAM.
 
+Note that `--max-workspace-mb` is **not** one of those levers: it caps the
+scratch TensorRT may use while *searching tactics during the build*, and has no
+effect on what a loaded engine reserves. Lowering it to save *runtime* VRAM only
+risks worse tactics and a rebuild — its one legitimate use is escaping a build
+that runs out of memory, described next.
+
 If an engine *build* runs out of memory, TensorRT reports it as
 `Could not find any implementation for node ...`. That reads like an
 unsupported-operation problem, but the graph is fine -- there was not enough
 memory for the tactic search. The workspace budget is re-clamped against free
 VRAM before each engine, so this should be rare; if you still hit it, try a
 smaller `MODEL`, `DECODER_MODE=simple`, or a lower `--max-workspace-mb`.
+
+The large family (`large`, `large-v2`, `large-v3`, `large-v3-turbo`) is a
+different proposition from `base`, and the ratios above do not carry over. Its
+weights dominate, and in the default `kv` mode the decoder is three engines that
+each carry their own copy of the decoder weights — so resident VRAM lands at
+several times the FP16 weight size, which is tight next to another GPU tenant on
+a 16 GB card. If you are sharing the GPU with an LLM, `DECODER_MODE=simple` is
+the one lever that removes weight copies rather than merely scratch.
 
 ### Pre-requisites:
 1. Install and configure Docker
@@ -302,9 +318,19 @@ so its implementation drives latency. Two are available:
   projects cross-attention K/V once per utterance, across three TensorRT
   engines. Fastest.
 - **`simple`**: a single engine that recomputes the whole token prefix each
-  step. One engine context instead of three, so it uses less VRAM.
+  step. One engine instead of three — one set of decoder weights rather than
+  three — so it uses less VRAM.
 
-Measured on `base`, 300 utterances, float16 (RTX 3050, TensorRT 10):
+Engine *scratch* is no longer part of that difference: all of a checkpoint's
+engines share a single device-memory pool sized to the largest of them, since
+they only ever run one at a time (on a TensorRT that supports application-managed
+context memory; elsewhere each engine keeps a private pool). What `simple` still
+saves is the duplicated decoder weights, which is what matters on the large
+family. Every measured VRAM figure in this README predates pooling and so
+overstates the `kv` side.
+
+Measured on `base`, 300 utterances, float16 (RTX 3050, TensorRT 10). These
+predate engine-scratch pooling, so the `kv` VRAM figure is now lower than shown:
 
 | | `kv` (default) | `simple` |
 |---|---|---|
@@ -362,7 +388,7 @@ to gain. Before running it in production, measure on your hardware:
 
 For reference, the numbers that motivated the change (`base`, 300 utterances,
 RTX 3050, TensorRT 10, implicit quantization) — the int8 column is what
-explicit Q/DQ replaces:
+explicit Q/DQ replaces. As above, the VRAM row predates engine-scratch pooling:
 
 | `base`, 300 utterances (RTX 3050, TensorRT 10) | float16 | int8 (implicit) |
 |---|---|---|

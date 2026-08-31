@@ -77,14 +77,52 @@ def _trt_module_class() -> type[Any]:
     return module_cls
 
 
-def _new_trt_module() -> Any:
-    """Create a new torch2trt TRTModule instance with runtime validation."""
-    return _instantiate_type(_trt_module_class())
+def _new_trt_module(device_memory: Any = None) -> Any:
+    """Create a new torch2trt TRTModule instance with runtime validation.
+
+    ``device_memory`` is an optional ``SharedDeviceMemory`` pool the module's
+    execution context should draw its scratch from; ``None`` keeps torch2trt's
+    default of a private pool per context.
+
+    The keyword is omitted entirely when there is no pool: a torch2trt predating
+    ``SharedDeviceMemory`` has no such parameter, and passing it would raise
+    TypeError on exactly the path that is supposed to degrade quietly.
+    """
+    module_cls = _trt_module_class()
+    if device_memory is None:
+        return _instantiate_type(module_cls)
+    return _instantiate_type(module_cls, device_memory=device_memory)
 
 
-def _instantiate_type(class_type: type[Any]) -> Any:
+def _instantiate_type(class_type: type[Any], **kwargs: Any) -> Any:
     """Instantiate a type object while preserving explicit typing."""
-    return class_type()
+    return class_type(**kwargs)
+
+
+def _new_shared_device_memory() -> Any:
+    """Return a fresh shared engine scratch pool, or None if unsupported.
+
+    Each TensorRT execution context otherwise reserves a private device-memory
+    pool sized for its engine's worst-case layer scratch. A Whisper checkpoint
+    is up to four engines (encoder plus a three-engine KV decoder) that only
+    ever run one at a time, so private pools reserve that scratch four times
+    over. Sharing one pool sized to the largest engine gives the same execution
+    with a fraction of the resident scratch.
+
+    Returns None when running against a torch2trt without ``SharedDeviceMemory``
+    so the engines simply keep their private pools rather than failing to load.
+    """
+    pool_cls = getattr(torch2trt, "SharedDeviceMemory", None)
+    if pool_cls is None:
+        logger.debug(
+            "torch2trt has no SharedDeviceMemory; engines will each reserve a "
+            "private device-memory pool."
+        )
+        return None
+    # Instantiated through the typed helper, as with TRTModule above: a class
+    # resolved by getattr is untyped, and calling it directly is what pylint
+    # flags as not-callable.
+    return _instantiate_type(pool_cls)
 
 
 class IncompatibleEngineError(RuntimeError):
@@ -128,16 +166,28 @@ def get_trt_version_tag() -> str:
     return "trt" + re.sub(r"[^0-9A-Za-z]+", "_", str(tensorrt.__version__))
 
 
-def _load_engine_module(engine_state: dict[str, Any], what: str) -> Any:
-    """Deserialize one TRT engine from checkpoint state into a TRTModule.
+def _load_engine_module(
+    checkpoint: dict[str, Any], key: str, what: str, device_memory: Any = None
+) -> Any:
+    """Deserialize one TRT engine out of a checkpoint into a TRTModule.
+
+    The engine state is *popped* from ``checkpoint`` and dropped as soon as
+    ``deserialize_cuda_engine`` has consumed it. Each entry is a host bytearray
+    holding a whole serialized plan (GB-scale for the large family), and
+    ``deserialize_cuda_engine`` makes its own copy — so holding every blob until
+    ``load`` returns doubles the peak for no reason. Popping keeps at most one
+    serialized plan live at a time.
 
     ``TRTModule._load_from_state_dict`` leaves ``engine`` as ``None`` when
     ``deserialize_cuda_engine`` fails, which otherwise only surfaces later as
     an opaque ``AttributeError`` on ``NoneType``. Convert it here into an
     actionable error the loader can respond to by rebuilding.
     """
-    module = _new_trt_module().cuda()
+    engine_state = checkpoint.pop(key)
+    module = _new_trt_module(device_memory=device_memory).cuda()
     module.load_state_dict(engine_state)
+    del engine_state
+    _reclaim_memory()
     if getattr(module, "engine", None) is None:
         raise IncompatibleEngineError(
             f"Failed to deserialize the '{what}' TensorRT engine on this device "
@@ -1314,10 +1364,11 @@ class WhisperTRTBuilder:
     def _load_audio_encoder(
         cls,
         checkpoint: dict[str, Any],
+        device_memory: Any = None,
     ) -> AudioEncoderTRT:
         """Construct AudioEncoderTRT from a serialized checkpoint."""
         audio_encoder_engine = _load_engine_module(
-            checkpoint["audio_encoder_engine"], "audio_encoder"
+            checkpoint, "audio_encoder_engine", "audio_encoder", device_memory
         )
         audio_state = checkpoint["audio_encoder_extra_state"]
         return AudioEncoderTRT(
@@ -1335,6 +1386,16 @@ class WhisperTRTBuilder:
         text_state = checkpoint["text_decoder_extra_state"]
         token_embedding = nn.Embedding(dims.n_vocab, dims.n_text_state)
         token_embedding.load_state_dict(text_state["token_embedding"])
+        if cls._decoder_fp16():
+            # This table is the largest thing torch itself keeps resident: the
+            # multilingual vocab makes it n_vocab x n_text_state, which is
+            # ~265 MiB in FP32 for the large family. It is tied weights — used
+            # both for the input lookup and for the output logits projection —
+            # and the decoder engines it feeds are FP16 either way, so keeping a
+            # FP32 master copy buys nothing but VRAM. The consumers in
+            # ``_decoder`` cast the hidden state to the weight dtype, so this is
+            # dtype-safe in both modes; logits are still returned as FP32.
+            token_embedding = token_embedding.half()
         positional_embedding = nn.Parameter(text_state["positional_embedding"]).cuda()
         ln_layer = LayerNorm(dims.n_text_state)
         ln_layer.load_state_dict(text_state["ln"])
@@ -1353,19 +1414,24 @@ class WhisperTRTBuilder:
         cls,
         checkpoint: dict[str, Any],
         dims: ModelDimensions,
+        device_memory: Any = None,
     ) -> TextDecoderTRTKV | TextDecoderTRT:
         """Construct the runtime text decoder matching the checkpoint's mode."""
         state = cls._load_text_decoder_state(checkpoint, dims)
         if checkpoint.get("decoder_mode") == "simple":
             engine = _load_engine_module(
-                checkpoint["text_decoder_engine"], "text_decoder"
+                checkpoint, "text_decoder_engine", "text_decoder", device_memory
             )
             return TextDecoderTRT(engine, state)
 
-        cross_kv_engine = _load_engine_module(checkpoint["cross_kv_engine"], "cross_kv")
-        prefill_engine = _load_engine_module(checkpoint["prefill_engine"], "prefill")
+        cross_kv_engine = _load_engine_module(
+            checkpoint, "cross_kv_engine", "cross_kv", device_memory
+        )
+        prefill_engine = _load_engine_module(
+            checkpoint, "prefill_engine", "prefill", device_memory
+        )
         step_engine = _load_engine_module(
-            checkpoint["decoder_step_engine"], "decoder_step"
+            checkpoint, "decoder_step_engine", "decoder_step", device_memory
         )
         return TextDecoderTRTKV(
             DecoderEngines(
@@ -1381,10 +1447,33 @@ class WhisperTRTBuilder:
     @torch.no_grad()
     def load(cls, trt_model_path: str) -> WhisperTRT:
         """Load a TensorRT checkpoint from disk into a ready-to-run model."""
-        checkpoint = torch.load(trt_model_path)
+        # map_location="cpu": every tensor in the checkpoint is either small
+        # (the harvested embeddings/masks, moved to the device explicitly below)
+        # or a host-side serialized plan. Letting torch restore them onto the
+        # GPU only to have the engines' own device allocations land on top of
+        # them raises the load-time peak for nothing.
+        # weights_only=True: a checkpoint is an untrusted file on disk, and
+        # unrestricted unpickling would execute whatever it carries. Everything
+        # these hold survives the restricted unpickler -- tensors, dicts,
+        # OrderedDicts, primitives, and the bytearray TensorRT plans.
+        checkpoint = torch.load(trt_model_path, map_location="cpu", weights_only=True)
         dims = ModelDimensions(**checkpoint["dims"])
-        encoder = cls._load_audio_encoder(checkpoint)
-        decoder = cls._load_text_decoder(checkpoint, dims)
+        # One scratch pool for every engine in this checkpoint. The pool is
+        # referenced by each TRTModule, so it stays alive as long as the
+        # contexts that point into it — it must not outlive them or be dropped
+        # first. Engines run strictly one at a time here (encode, then the
+        # decode loop), which is the condition sharing requires.
+        device_memory = _new_shared_device_memory()
+        encoder = cls._load_audio_encoder(checkpoint, device_memory)
+        decoder = cls._load_text_decoder(checkpoint, dims, device_memory)
+        # The engines are deserialized; only the small extra-state dicts remain.
+        del checkpoint
+        _reclaim_memory()
+        if device_memory is not None:
+            logger.debug(
+                "Engine scratch: %.1f MiB shared across all engines.",
+                device_memory.nbytes / (1 << 20),
+            )
 
         whisper_trt = WhisperTRT(
             dims,
@@ -1606,6 +1695,13 @@ def load_trt_model(
         if not build:
             raise RuntimeError(f"No model found at {path}; pass build=True.")
         builder.build(path, verbose=verbose)
+        # A build in this process leaves GB-scale residue behind: the ONNX
+        # graphs and TRT builder arenas on the host, and torch's cached device
+        # blocks from tracing the FP16 model. None of it is live, but without an
+        # explicit reclaim the engine we are about to load comes up on top of
+        # it, and the process holds a build-shaped footprint for its whole
+        # lifetime rather than an inference-shaped one.
+        _reclaim_memory()
 
     try:
         trt_model = builder.load(path)
@@ -1622,6 +1718,7 @@ def load_trt_model(
         # may have reached the same conclusion and unlinked it first.
         Path(path).unlink(missing_ok=True)
         builder.build(path, verbose=verbose)
+        _reclaim_memory()
         trt_model = builder.load(path)
 
     try:
