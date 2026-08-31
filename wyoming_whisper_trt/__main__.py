@@ -14,6 +14,7 @@ import math
 import os
 import sys
 import time
+import warnings
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
@@ -403,8 +404,31 @@ def _validate_args(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def _silence_unsupported_arch_warning() -> None:
+    """Drop torch's "this GPU is unsupported" warning on Jetson Orin.
+
+    Torch compares the device's compute capability against the arch list its
+    wheel was published for. Orin is sm_87, which the ARM64 CUDA wheels do not
+    name, so torch warns at CUDA init -- but CUDA runs a cubin on any GPU
+    sharing its major version, so the sm_80 code in those wheels executes
+    natively on sm_87. The warning is a list lookup, not a measurement, and it
+    reads as a fatal misconfiguration to anyone reading container logs.
+
+    Deliberately narrow: it matches only this message, so a genuinely
+    unsupported GPU still warns. Must run before anything touches CUDA.
+    """
+    warnings.filterwarnings(
+        "ignore",
+        message=r".*Found GPU.*compute capability.*",
+        category=UserWarning,
+    )
+
+
 async def main() -> None:
     """Main entry point."""
+    # Before _parse_args: auto_workspace_mb reads mem_get_info below, and that
+    # initialises CUDA, which is what emits the warning.
+    _silence_unsupported_arch_warning()
     args = _parse_args()
     _validate_args(args)
 
