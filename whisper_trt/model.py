@@ -57,11 +57,13 @@ from ._decoder import (
     CrossKVProjector,
     DecoderEngines,
     DecodeRequest,
+    GraphCachedDecoderStep,
     PrefillDecoder,
     TextDecoderEngine,
     TextDecoderState,
     TextDecoderTRT,
     TextDecoderTRTKV,
+    TextDecoderTRTKVGraph,
 )
 from .cache import get_cache_dir, make_cache_dir
 
@@ -258,12 +260,19 @@ def _torch2trt_convert(
         if not _looks_like_build_oom(str(err)):
             raise
         raise RuntimeError(
-            "TensorRT ran out of memory building this engine "
+            "TensorRT could not build this engine within its workspace "
             f"(workspace {workspace_mb} MiB; {_describe_free_vram()}). "
             "TensorRT reports this as a missing implementation for a node, but "
-            "the graph is supported -- there was not enough memory for the "
-            "tactic search. Try a smaller model, --decoder-mode simple, or a "
-            "lower --max-workspace-mb."
+            "the graph is supported -- tactic search did not have the memory "
+            "it needed. The fix depends on which side is short:\n"
+            "  * Plenty of VRAM free? The workspace is the limit -- RAISE "
+            "--max-workspace-mb (small.en's prefill engine, for one, needs "
+            "more than the auto-selected budget and builds at 4096).\n"
+            "  * Little VRAM free? The build itself is starved -- free the GPU, "
+            "pick a smaller model, or use --decoder-mode simple.\n"
+            "Note the auto-selected budget is re-clamped against free VRAM "
+            "before every engine, so a busy GPU silently shrinks it; an "
+            "explicit --max-workspace-mb is honoured as given."
         ) from err
 
 
@@ -466,7 +475,7 @@ class WhisperTRT(nn.Module):
         self,
         dims: ModelDimensions,
         encoder: AudioEncoderTRT,
-        decoder: TextDecoderTRTKV | TextDecoderTRT,
+        decoder: TextDecoderTRTKV | TextDecoderTRTKVGraph | TextDecoderTRT,
         config: WhisperTRTConfig | None = None,
     ) -> None:
         super().__init__()
@@ -598,9 +607,68 @@ class WhisperTRT(nn.Module):
         request: DecodeRequest,
     ) -> tuple[str, list[str], float]:
         """Dispatch decoding to the cached or single-engine implementation."""
+        if isinstance(self.decoder, TextDecoderTRTKVGraph):
+            return self._decode_sequence_kv_graph(tokenizer, request)
         if isinstance(self.decoder, TextDecoderTRTKV):
             return self._decode_sequence_kv(tokenizer, request)
         return self._decode_sequence_simple(tokenizer, request)
+
+    def _decode_sequence_kv_graph(
+        self,
+        tokenizer: Tokenizer,
+        request: DecodeRequest,
+    ) -> tuple[str, list[str], float]:
+        """Autoregressively decode by replaying a captured CUDA graph.
+
+        Identical token-for-token to ``_decode_sequence_kv``: the prompt is
+        prefilled by the same engine, and generation still stops on the first
+        ``eot``. The difference is that each step is one graph replay against
+        fixed buffers instead of a fresh enqueue, and the predicted token is
+        fed back on the device rather than through the host.
+        """
+        chunks: list[str] = []
+        decode_start = time.perf_counter()
+        decoder = cast(TextDecoderTRTKVGraph, self.decoder)
+
+        cross_kv = decoder.compute_cross_kv(request.audio_features)
+        prompt_ids = request.out_tokens[0, : request.prompt_len].tolist()
+        logits, self_kv = decoder.prefill(prompt_ids, cross_kv)
+
+        # Same position Whisper evaluates for no-speech as the dynamic path.
+        if self._is_no_speech(tokenizer, logits, request.no_speech_threshold):
+            return "", [], time.perf_counter() - decode_start
+
+        next_token_id = int(logits.argmax(dim=-1)[0, -1].item())
+        decoder.begin(cross_kv, self_kv, request.prompt_len, next_token_id)
+
+        last_token_id = -1
+        while request.cur_len < request.max_len:
+            last_token_id = next_token_id
+            request.out_tokens[0, request.cur_len] = last_token_id
+            request.cur_len += 1
+
+            if request.stream:
+                interim = request.out_tokens[:, request.prompt_len : request.cur_len]
+                chunks.append(self._decode_tokens(interim))
+
+            if last_token_id == tokenizer.eot or request.cur_len >= request.max_len:
+                break
+            if not decoder.can_step():
+                # Cache capacity is n_text_ctx, the same ceiling the dynamic
+                # decoder's engine has, so this is unreachable in practice.
+                logger.warning("KV cache capacity reached; stopping decode early.")
+                break
+
+            next_token_id = decoder.step()
+
+        end_index = request.cur_len
+        if last_token_id == tokenizer.eot:
+            end_index = request.cur_len - 1
+
+        final_text = self._decode_tokens(
+            request.out_tokens[:, request.prompt_len : end_index]
+        )
+        return final_text, chunks, time.perf_counter() - decode_start
 
     def _decode_sequence_simple(
         self,
@@ -950,6 +1018,19 @@ class WhisperTRTBuilder:
     fp16_mode: bool = False
     quant_mode: str = "float32"  # Options: "float32", "float16", "int8"
     decoder_mode: str = "kv"  # Options: "kv" (3 engines, fast), "simple" (1, lean)
+    # Replay the per-token decoder step from a captured CUDA graph. On by
+    # default because the decode loop is host-launch-bound at every model size
+    # -- issuing the step costs about as much wall time as running it (measured
+    # 2.951 ms of a 2.960 ms step on small.en) -- and graph replay reissues the
+    # same launches for a few microseconds.
+    #
+    # This selects a *different step engine*: fixed-capacity cache instead of a
+    # dynamic one (see build_decoder_step_graph_engine), which is why it feeds
+    # into the engine-schema tag rather than being a pure runtime switch. Turn
+    # it off with --no-cuda-graphs to get the dynamic step engine back.
+    # Ignored by decoder_mode "simple", whose engine re-runs the whole prefix
+    # and therefore changes shape every token.
+    cuda_graphs: bool = True
     # Per-engine TensorRT *build-time* scratch budget. This is a ceiling on the
     # workspace a layer may use during tactic search, not a runtime allocation
     # — TensorRT reserves only what each engine actually needs (well under this
@@ -965,6 +1046,20 @@ class WhisperTRTBuilder:
     verbose: bool = False
     _tokenizer: Tokenizer | None = None
     _dims: ModelDimensions | None = None
+
+    @classmethod
+    def effective_decoder_mode(cls) -> str:
+        """Resolve the user-facing settings to the mode that names the engines.
+
+        ``decoder_mode`` is what the user asks for ("kv" or "simple");
+        ``cuda_graphs`` then picks which *step engine* a "kv" build uses. The
+        result is what keys the engine-schema tag and therefore the cache
+        filename, so the graph and non-graph step engines can never be loaded
+        into each other's runtime decoder.
+        """
+        if cls.decoder_mode == "kv" and cls.cuda_graphs:
+            return "kv_graph"
+        return cls.decoder_mode
 
     @classmethod
     def _effective_workspace(cls) -> int:
@@ -1174,6 +1269,51 @@ class WhisperTRTBuilder:
 
     @classmethod
     @torch.no_grad()
+    def build_decoder_step_graph_engine(cls) -> Any:
+        """Build the fixed-capacity, CUDA-graph-friendly decoder-step engine.
+
+        Unlike ``build_decoder_step_engine`` this declares no dynamic axis at
+        all: the self-attention cache always arrives at its full capacity
+        (``n_text_ctx``) with the unwritten tail masked off, and only the new
+        token's K/V comes back. Constant shapes are what make the step
+        capturable -- a CUDA graph records shapes and addresses, so a cache
+        that grows by one each token would force a re-capture per token.
+
+        A single optimization profile with min == opt == max also lets
+        TensorRT specialise tactics for the one shape it will ever see.
+        """
+        dims = cls._load_model_once()
+        model_inst = load_model(cls.model).cuda().eval()
+        module = GraphCachedDecoderStep(model_inst.decoder.blocks, dims.n_text_head)
+
+        n_layers = dims.n_text_layer
+        n_state = dims.n_text_state
+        n_audio_ctx = dims.n_audio_ctx
+        capacity = dims.n_text_ctx
+
+        x = torch.randn(1, 1, n_state).cuda()
+        self_kv = torch.randn(2, n_layers, 1, capacity, n_state).cuda()
+        cross_kv = torch.randn(2, n_layers, 1, n_audio_ctx, n_state).cuda()
+        # Zeros, not randn: the mask is additive and -inf entries would make the
+        # traced softmax produce NaNs during ONNX export's shape inference.
+        mask = torch.zeros(1, capacity + 1).cuda()
+
+        _reclaim_memory()
+        with disable_sdpa():
+            return _torch2trt_convert(
+                module,
+                [x, self_kv, cross_kv, mask],
+                use_onnx=True,
+                int8_mode=False,
+                input_names=["x", "self_kv", "cross_kv", "mask"],
+                output_names=["hidden", "new_self_kv"],
+                max_workspace_size=cls._effective_workspace(),
+                fp16_mode=cls._decoder_fp16(),
+                log_level=_trt_log_level(cls.verbose),
+            )
+
+    @classmethod
+    @torch.no_grad()
     def build_text_decoder_engine(cls) -> Any:
         """Build the single-engine ("simple") text decoder.
 
@@ -1332,18 +1472,20 @@ class WhisperTRTBuilder:
     @classmethod
     @torch.no_grad()
     def _build_decoder_engines(cls) -> dict[str, Any]:
-        """Build the decoder engine(s) for the active ``decoder_mode``.
+        """Build the decoder engine(s) for the active decoder mode.
 
-        "kv" yields the three cached-decode engines; "simple" yields the one
-        full-recompute engine. The runtime decoder is reconstructed from
-        whichever keys are present (the checkpoint records the mode).
+        "kv"/"kv_graph" yield the three cached-decode engines (differing only
+        in the step engine); "simple" yields the one full-recompute engine. The
+        runtime decoder is reconstructed from whichever keys are present (the
+        checkpoint records the mode).
         """
-        if cls.decoder_mode not in _ENGINE_SCHEMA:
+        mode = cls.effective_decoder_mode()
+        if mode not in _ENGINE_SCHEMA:
             raise RuntimeError(
-                f"Unknown decoder_mode '{cls.decoder_mode}'. "
+                f"Unknown decoder_mode '{mode}'. "
                 f"Valid options: {list(_ENGINE_SCHEMA.keys())}"
             )
-        if cls.decoder_mode == "simple":
+        if mode == "simple":
             engines = {
                 "text_decoder_engine": cls.build_text_decoder_engine().state_dict()
             }
@@ -1357,7 +1499,16 @@ class WhisperTRTBuilder:
         _reclaim_memory()
         engines["prefill_engine"] = cls.build_prefill_engine().state_dict()
         _reclaim_memory()
-        engines["decoder_step_engine"] = cls.build_decoder_step_engine().state_dict()
+        if mode == "kv_graph":
+            # Same cross-K/V and prefill engines as "kv"; only the per-token
+            # step differs (fixed capacity, so it can be graph-captured).
+            engines["decoder_step_graph_engine"] = (
+                cls.build_decoder_step_graph_engine().state_dict()
+            )
+        else:
+            engines["decoder_step_engine"] = (
+                cls.build_decoder_step_engine().state_dict()
+            )
         _reclaim_memory()
         return engines
 
@@ -1379,7 +1530,7 @@ class WhisperTRTBuilder:
         checkpoint: dict[str, Any] = {
             "whisper_trt_version": __version__,
             "dims": asdict(base.dims),
-            "decoder_mode": cls.decoder_mode,
+            "decoder_mode": cls.effective_decoder_mode(),
             "text_decoder_extra_state": cls.get_text_decoder_extra_state(base),
             "audio_encoder_extra_state": cls.get_audio_encoder_extra_state(base),
         }
@@ -1460,7 +1611,7 @@ class WhisperTRTBuilder:
         checkpoint: dict[str, Any],
         dims: ModelDimensions,
         device_memory: Any = None,
-    ) -> TextDecoderTRTKV | TextDecoderTRT:
+    ) -> TextDecoderTRTKV | TextDecoderTRTKVGraph | TextDecoderTRT:
         """Construct the runtime text decoder matching the checkpoint's mode."""
         state = cls._load_text_decoder_state(checkpoint, dims)
         if checkpoint.get("decoder_mode") == "simple":
@@ -1475,6 +1626,22 @@ class WhisperTRTBuilder:
         prefill_engine = _load_engine_module(
             checkpoint, "prefill_engine", "prefill", device_memory
         )
+        if checkpoint.get("decoder_mode") == "kv_graph":
+            graph_step_engine = _load_engine_module(
+                checkpoint,
+                "decoder_step_graph_engine",
+                "decoder_step_graph",
+                device_memory,
+            )
+            return TextDecoderTRTKVGraph(
+                DecoderEngines(
+                    cross_kv=cross_kv_engine,
+                    prefill=prefill_engine,
+                    step=graph_step_engine,
+                ),
+                state,
+                dims,
+            )
         step_engine = _load_engine_module(
             checkpoint, "decoder_step_engine", "decoder_step", device_memory
         )
@@ -1644,7 +1811,7 @@ MODEL_BUILDERS = {
 # collide. "kv4" = the three-engine KV-cached decoder (cross_kv + prefill +
 # step); "simple1" = the single full-recompute decoder engine. Pre-schema
 # engines used no tag, so those files remain on disk untouched.
-_ENGINE_SCHEMA = {"kv": "kv4", "simple": "simple1"}
+_ENGINE_SCHEMA = {"kv": "kv4", "simple": "simple1", "kv_graph": "kvgraph1"}
 
 
 def get_model_filename(
@@ -1670,8 +1837,9 @@ def get_model_filename(
     Args:
         name (str): The model name (e.g. "tiny", "base.en").
         quant_mode (str): The quantization mode ("float32", "float16", or "int8").
-        decoder_mode (str | None): "kv" or "simple"; defaults to the builder's
-            current ``decoder_mode``.
+        decoder_mode (str | None): "kv", "kv_graph" or "simple"; defaults to
+            the builder's resolved mode (``effective_decoder_mode``, which folds
+            in the ``cuda_graphs`` setting).
         max_workspace_mb (int | None): Per-engine TensorRT workspace budget in MiB;
             defaults to the builder's current ``max_workspace_size`` converted to MiB.
 
@@ -1686,7 +1854,7 @@ def get_model_filename(
     """
     if name not in MODEL_FILENAMES:
         raise RuntimeError(f"Model '{name}' is not supported by WhisperTRT.")
-    mode = decoder_mode or WhisperTRTBuilder.decoder_mode
+    mode = decoder_mode or WhisperTRTBuilder.effective_decoder_mode()
     if mode not in _ENGINE_SCHEMA:
         raise RuntimeError(
             f"Unknown decoder_mode '{mode}'. Valid options: {list(_ENGINE_SCHEMA.keys())}"
