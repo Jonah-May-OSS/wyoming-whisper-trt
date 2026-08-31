@@ -138,7 +138,7 @@ Thor-only.)
 The `-igpu` image is JetPack 6 only. Running it on JetPack 7 loops on startup
 with:
 
-```
+```text
 ImportError: libnvdla_compiler.so: cannot open shared object file: No such file or directory
 ```
 
