@@ -100,6 +100,13 @@ Most of the runtime footprint is the fixed CUDA/cuDNN context rather than the
 model weights (the TensorRT engines for `base` total only tens of MiB), so
 model choice and decoder mode are the levers that actually move VRAM.
 
+If an engine *build* runs out of memory, TensorRT reports it as
+`Could not find any implementation for node ...`. That reads like an
+unsupported-operation problem, but the graph is fine -- there was not enough
+memory for the tactic search. The workspace budget is re-clamped against free
+VRAM before each engine, so this should be rare; if you still hit it, try a
+smaller `MODEL`, `DECODER_MODE=simple`, or a lower `--max-workspace-mb`.
+
 ### Pre-requisites:
 1. Install and configure Docker
 2. Install and configure the [Nvidia Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)

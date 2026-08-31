@@ -157,6 +157,24 @@ def _invoke_converter(
     return converter(module, inputs, **kwargs)
 
 
+# TensorRT reports a build that ran out of memory by naming the node whose
+# tactics it could not fit, which reads as an unsupported-op or bad-export
+# problem and sends people looking in the wrong place entirely. These are the
+# markers seen on memory-constrained devices; matched case-insensitively.
+_OOM_BUILD_MARKERS = (
+    "could not find any implementation for node",
+    "no implementation obeys reformatting-free rules",
+    "out of memory",
+    "outofmemory",
+)
+
+
+def _looks_like_build_oom(message: str) -> bool:
+    """Return True when a TensorRT build failure reads as memory exhaustion."""
+    lowered = message.lower()
+    return any(marker in lowered for marker in _OOM_BUILD_MARKERS)
+
+
 def _torch2trt_convert(
     module: nn.Module, inputs: list[torch.Tensor], **kwargs: Any
 ) -> Any:
@@ -164,7 +182,25 @@ def _torch2trt_convert(
     converter = getattr(torch2trt, "torch2trt", None)
     if converter is None or not callable(converter):
         raise RuntimeError("torch2trt.torch2trt is unavailable")
-    return _invoke_converter(converter, module, inputs, **kwargs)
+    workspace_mb = int(kwargs.get("max_workspace_size", 0)) >> 20
+    logger.debug(
+        "Building TensorRT engine with a %d MiB workspace; %s.",
+        workspace_mb,
+        _describe_free_vram(),
+    )
+    try:
+        return _invoke_converter(converter, module, inputs, **kwargs)
+    except Exception as err:  # re-raised below; TRT's type varies by version
+        if not _looks_like_build_oom(str(err)):
+            raise
+        raise RuntimeError(
+            "TensorRT ran out of memory building this engine "
+            f"(workspace {workspace_mb} MiB; {_describe_free_vram()}). "
+            "TensorRT reports this as a missing implementation for a node, but "
+            "the graph is supported -- there was not enough memory for the "
+            "tactic search. Try a smaller model, --decoder-mode simple, or a "
+            "lower --max-workspace-mb."
+        ) from err
 
 
 def _trt_log_level(verbose: bool) -> int:
@@ -173,6 +209,16 @@ def _trt_log_level(verbose: bool) -> int:
     if logger_cls is None:
         raise RuntimeError("tensorrt.Logger is unavailable")
     return logger_cls.VERBOSE if verbose else logger_cls.ERROR
+
+
+def _describe_free_vram() -> str:
+    """Return a short human-readable free/total VRAM string for log messages."""
+    try:
+        free_bytes, total_bytes = torch.cuda.mem_get_info()
+    except (RuntimeError, AssertionError):
+        return "free VRAM unknown"
+    mib = 1 << 20
+    return f"{free_bytes // mib} MiB free of {total_bytes // mib} MiB"
 
 
 def _resolve_malloc_trim() -> Callable[[int], int] | None:
@@ -835,9 +881,47 @@ class WhisperTRTBuilder:
     # worse tactics and raised WER. Lower via --max-workspace-mb only as an
     # OOM escape hatch when building a very large model.
     max_workspace_size: int = 1 << 30
+    # True when max_workspace_size came from --max-workspace-mb. An explicit
+    # budget is honoured as given; only the auto-selected one is re-clamped
+    # per engine (see _effective_workspace).
+    max_workspace_explicit: bool = False
     verbose: bool = False
     _tokenizer: Tokenizer | None = None
     _dims: ModelDimensions | None = None
+
+    @classmethod
+    def _effective_workspace(cls) -> int:
+        """Return the workspace budget for the engine about to be built.
+
+        ``auto_workspace_mb`` runs once, before the build, when nothing is
+        resident yet -- no Whisper weights, no finished engines. A "kv" build
+        then makes four engines in sequence, each one leaving its weights in
+        VRAM, so by the last build the free memory that sized the budget is
+        long gone and the stale ceiling can let tactic search reserve more than
+        is left. Re-clamping against *current* free VRAM before each build is
+        what keeps the later engines in a sequence from OOMing on a small GPU.
+
+        An explicit --max-workspace-mb is returned untouched: the user asked
+        for that number, and silently shrinking it would make the flag a
+        suggestion.
+        """
+        if cls.max_workspace_explicit:
+            return cls.max_workspace_size
+        try:
+            free_bytes, _total = torch.cuda.mem_get_info()
+        except (RuntimeError, AssertionError):
+            return cls.max_workspace_size
+        spare_mb = free_bytes / (1 << 20) - _BUILD_MEMORY_RESERVE_MB
+        cap_mb = max(_MIN_WORKSPACE_MB, int(_WORKSPACE_VRAM_FRACTION * spare_mb))
+        clamped = min(cls.max_workspace_size, cap_mb << 20)
+        if clamped < cls.max_workspace_size:
+            logger.debug(
+                "Clamping workspace from %d MiB to %d MiB for this engine (%s).",
+                cls.max_workspace_size >> 20,
+                clamped >> 20,
+                _describe_free_vram(),
+            )
+        return clamped
 
     @classmethod
     def get_compute_type(cls) -> str:
@@ -902,7 +986,7 @@ class WhisperTRTBuilder:
                 int8_mode=False,
                 input_names=["xa"],
                 output_names=["cross_kv"],
-                max_workspace_size=cls.max_workspace_size,
+                max_workspace_size=cls._effective_workspace(),
                 fp16_mode=cls._decoder_fp16(),
                 log_level=_trt_log_level(cls.verbose),
             )
@@ -953,7 +1037,7 @@ class WhisperTRTBuilder:
                 ],
                 input_names=["x", "cross_kv", "mask"],
                 output_names=["last_hidden", "self_kv"],
-                max_workspace_size=cls.max_workspace_size,
+                max_workspace_size=cls._effective_workspace(),
                 fp16_mode=cls._decoder_fp16(),
                 log_level=_trt_log_level(cls.verbose),
             )
@@ -1006,7 +1090,7 @@ class WhisperTRTBuilder:
                 ],
                 input_names=["x", "self_kv", "cross_kv"],
                 output_names=["hidden", "new_self_kv"],
-                max_workspace_size=cls.max_workspace_size,
+                max_workspace_size=cls._effective_workspace(),
                 fp16_mode=cls._decoder_fp16(),
                 log_level=_trt_log_level(cls.verbose),
             )
@@ -1056,7 +1140,7 @@ class WhisperTRTBuilder:
                 ],
                 input_names=["x", "xa", "mask"],
                 output_names=["output"],
-                max_workspace_size=cls.max_workspace_size,
+                max_workspace_size=cls._effective_workspace(),
                 fp16_mode=cls._decoder_fp16(),
                 log_level=_trt_log_level(cls.verbose),
             )
@@ -1113,7 +1197,7 @@ class WhisperTRTBuilder:
                 ],
                 input_names=["x", "positional_embedding"],
                 output_names=["output"],
-                max_workspace_size=cls.max_workspace_size,
+                max_workspace_size=cls._effective_workspace(),
                 # Everything the Q/DQ pairs don't cover (attention matmuls,
                 # layer norms, softmax) is cast to FP16 in the same quantizer
                 # pass, so an int8 encoder is INT8-where-quantized, FP16 else.

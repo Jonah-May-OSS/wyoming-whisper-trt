@@ -88,3 +88,97 @@ def test_falls_back_to_target_when_cuda_info_unavailable() -> None:
     ):
         assert auto_workspace_mb("large-v3") == _LARGE_WORKSPACE_MB
         assert auto_workspace_mb("base") == _DEFAULT_WORKSPACE_MB
+
+
+class TestEffectiveWorkspace:
+    """The per-engine re-clamp applied just before each engine build.
+
+    ``auto_workspace_mb`` runs once, before anything is resident. A "kv" build
+    then makes four engines in sequence, each leaving weights in VRAM, so the
+    free memory that sized the original budget is gone by the last build.
+    ``_effective_workspace`` re-reads free VRAM before each one.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _restore_builder_state(self):
+        # These set class attributes, so put them back or the next test in the
+        # session inherits whatever the last one left behind.
+        from whisper_trt.model import WhisperTRTBuilder
+
+        size = WhisperTRTBuilder.max_workspace_size
+        explicit = WhisperTRTBuilder.max_workspace_explicit
+        yield
+        WhisperTRTBuilder.max_workspace_size = size
+        WhisperTRTBuilder.max_workspace_explicit = explicit
+
+    def _builder(self, size_mb: int, explicit: bool):
+        from whisper_trt.model import WhisperTRTBuilder
+
+        WhisperTRTBuilder.max_workspace_size = size_mb * _MIB
+        WhisperTRTBuilder.max_workspace_explicit = explicit
+        return WhisperTRTBuilder
+
+    def test_auto_budget_shrinks_as_vram_fills(self) -> None:
+        builder = self._builder(4096, explicit=False)
+        # Ample VRAM: the up-front budget survives untouched.
+        with _free_vram(16 * 1024):
+            assert builder._effective_workspace() == 4096 * _MIB
+        # Three engines later there is far less free, so the stale ceiling is
+        # cut down rather than letting tactic search reserve what isn't there.
+        with _free_vram(4 * 1024):
+            clamped = builder._effective_workspace()
+        assert (
+            clamped
+            == int(_VRAM_FRACTION * (4 * 1024 - _BUILD_MEMORY_RESERVE_MB)) * _MIB
+        )
+        assert clamped < 4096 * _MIB
+
+    def test_explicit_budget_is_never_shrunk(self) -> None:
+        # --max-workspace-mb is a number the user asked for; silently reducing
+        # it would make the flag a suggestion.
+        builder = self._builder(4096, explicit=True)
+        with _free_vram(3 * 1024):
+            assert builder._effective_workspace() == 4096 * _MIB
+
+    def test_never_drops_below_the_floor(self) -> None:
+        builder = self._builder(4096, explicit=False)
+        with _free_vram(_BUILD_MEMORY_RESERVE_MB):
+            assert builder._effective_workspace() == _MIN_WORKSPACE_MB * _MIB
+
+    def test_falls_back_to_the_budget_without_cuda_info(self) -> None:
+        builder = self._builder(1024, explicit=False)
+        with patch(
+            "whisper_trt.model.torch.cuda.mem_get_info",
+            side_effect=RuntimeError("no cuda"),
+        ):
+            assert builder._effective_workspace() == 1024 * _MIB
+
+
+class TestBuildOomDetection:
+    """Recognising a TensorRT build OOM from its misleading message."""
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "Could not find any implementation for node {ForeignNode[...]}",
+            "[graph] no implementation obeys reformatting-free rules",
+            "Cuda Runtime (out of memory)",
+            "std::bad_alloc: OutOfMemory",
+        ],
+    )
+    def test_oom_shapes_are_recognised(self, message: str) -> None:
+        from whisper_trt.model import _looks_like_build_oom
+
+        assert _looks_like_build_oom(message)
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "Unsupported ONNX opset version: 21",
+            "Network has dynamic or shape inputs, but no optimization profile",
+        ],
+    )
+    def test_unrelated_failures_are_left_alone(self, message: str) -> None:
+        from whisper_trt.model import _looks_like_build_oom
+
+        assert not _looks_like_build_oom(message)
