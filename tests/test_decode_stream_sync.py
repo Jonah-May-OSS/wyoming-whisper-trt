@@ -98,7 +98,9 @@ def recorded_fixture(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
             current_stream = producer
             rec.events.append(f"exit({stream.name})")
 
-    monkeypatch.setattr(model_module.torch.cuda, "current_stream", lambda: current_stream)
+    monkeypatch.setattr(
+        model_module.torch.cuda, "current_stream", lambda: current_stream
+    )
     monkeypatch.setattr(model_module.torch.cuda, "stream", fake_stream_ctx)
 
     fake = _FakeModel(rec)
