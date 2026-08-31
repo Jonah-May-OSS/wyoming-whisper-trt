@@ -715,7 +715,20 @@ class WhisperTRT(nn.Module):
     ) -> tuple[str, list[str], float]:
         """Decode a mel tensor into final text and optional transcript chunks."""
         max_len = self.dims.n_text_ctx + 1
+        # ``mel`` was produced on the caller's stream. Entering a stream context
+        # does not synchronise, so without this wait the encoder can start on
+        # self.stream while the mel's kernels are still in flight and read the
+        # buffer a kernel short of complete. It decodes to a silence token --
+        # measured at 126/2400 transcriptions of clean speech coming back as
+        # '.', '[ Silence ]' or '[no audio]' across tiny/base/small, and 0/2400
+        # with this wait in place.
+        producer = torch.cuda.current_stream()
         with torch.cuda.stream(self.stream):
+            self.stream.wait_stream(producer)
+            # The mel was allocated against ``producer``; tell the allocator it
+            # is live on self.stream too, or it can be handed out again while
+            # the encoder is still reading it.
+            mel.record_stream(self.stream)
             audio_features = self.embed_audio(mel)
             tokenizer = self._get_tokenizer()
             self._configure_tokenizer(tokenizer, language)
