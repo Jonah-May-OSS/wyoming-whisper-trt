@@ -85,14 +85,20 @@ def recorded_fixture(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
     """Run ``_decode_mel`` against fakes and return the ordered call log."""
     rec = _Recorder()
     producer = _FakeStream("producer", rec)
+    current_stream = producer
 
     @contextmanager
     def fake_stream_ctx(stream: _FakeStream):
+        nonlocal current_stream
         rec.events.append(f"enter({stream.name})")
-        yield
-        rec.events.append(f"exit({stream.name})")
+        current_stream = stream
+        try:
+            yield
+        finally:
+            current_stream = producer
+            rec.events.append(f"exit({stream.name})")
 
-    monkeypatch.setattr(model_module.torch.cuda, "current_stream", lambda: producer)
+    monkeypatch.setattr(model_module.torch.cuda, "current_stream", lambda: current_stream)
     monkeypatch.setattr(model_module.torch.cuda, "stream", fake_stream_ctx)
 
     fake = _FakeModel(rec)
