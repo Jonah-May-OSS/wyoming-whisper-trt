@@ -4,6 +4,7 @@ These exercise ``auto_workspace_mb`` with ``torch.cuda.mem_get_info`` mocked,
 so they run on CPU-only CI runners (no real GPU required).
 """
 
+import warnings
 from unittest.mock import patch
 
 import pytest
@@ -182,3 +183,54 @@ class TestBuildOomDetection:
         from whisper_trt.model import _looks_like_build_oom
 
         assert not _looks_like_build_oom(message)
+
+
+class TestUnsupportedArchWarningFilter:
+    """The Orin sm_87 startup warning is silenced, but only that one."""
+
+    def _filtered(self, message: str) -> bool:
+        """Return True when the installed filter would suppress ``message``."""
+        from wyoming_whisper_trt.__main__ import _silence_unsupported_arch_warning
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.resetwarnings()
+            _silence_unsupported_arch_warning()
+            warnings.warn(message, UserWarning, stacklevel=1)
+            return not caught
+
+    def test_orin_capability_warning_is_silenced(self) -> None:
+        # The real message is multi-line; torch emits the "Found GPU" line
+        # first and filters match from the start of the message.
+        assert self._filtered(
+            "Found GPU0 Orin which is of compute capability (CC) 8.7.\n"
+            "The following list shows the CCs this version of PyTorch was "
+            "built for and the hardware CCs it supports:\n- 9.0 which "
+            "supports hardware CC range(90, 100)"
+        )
+
+    def test_older_torch_wording_is_also_silenced(self) -> None:
+        # torch reworded this message; both phrasings mean the same thing.
+        assert self._filtered(
+            "Found GPU0 Orin which is of cuda capability 8.7.\n"
+            "Minimum and Maximum cuda capability supported by this version "
+            "of PyTorch is (9.0) (12.0)"
+        )
+
+    def test_same_warning_about_another_gpu_is_not_silenced(self) -> None:
+        # Same message, same prefix, different capability: a card that really
+        # is unsupported must still warn, so the pattern pins 8.7 rather than
+        # matching any "Found GPU ... compute capability" line.
+        assert not self._filtered(
+            "Found GPU0 NVIDIA GeForce GTX 750 Ti which is of compute "
+            "capability (CC) 5.0.\nThe following list shows the CCs this "
+            "version of PyTorch was built for"
+        )
+
+    def test_other_warnings_still_surface(self) -> None:
+        # A genuinely unsupported GPU, and unrelated warnings, must not be
+        # swallowed by a filter aimed at one cosmetic message.
+        assert not self._filtered(
+            "NVIDIA GeForce GTX 780 with CUDA capability sm_35 is not "
+            "compatible with the current PyTorch installation."
+        )
+        assert not self._filtered("some unrelated deprecation")
