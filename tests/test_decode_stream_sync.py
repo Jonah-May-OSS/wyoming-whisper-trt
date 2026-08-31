@@ -92,9 +92,7 @@ def recorded_fixture(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         yield
         rec.events.append(f"exit({stream.name})")
 
-    monkeypatch.setattr(
-        model_module.torch.cuda, "current_stream", lambda: producer
-    )
+    monkeypatch.setattr(model_module.torch.cuda, "current_stream", lambda: producer)
     monkeypatch.setattr(model_module.torch.cuda, "stream", fake_stream_ctx)
 
     fake = _FakeModel(rec)
@@ -136,7 +134,5 @@ def test_wait_is_taken_on_the_stream_actually_in_use(
     already the decode stream, so capturing the producer *after* entering
     would make the wait a self-wait and silently do nothing."""
     events = recorded.events
-    assert events.index("decode.wait_stream(producer)") > events.index(
-        "enter(decode)"
-    )
+    assert events.index("decode.wait_stream(producer)") > events.index("enter(decode)")
     assert "decode.wait_stream(decode)" not in events
