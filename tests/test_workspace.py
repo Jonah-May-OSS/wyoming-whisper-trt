@@ -208,6 +208,24 @@ class TestUnsupportedArchWarningFilter:
             "supports hardware CC range(90, 100)"
         )
 
+    def test_older_torch_wording_is_also_silenced(self) -> None:
+        # torch reworded this message; both phrasings mean the same thing.
+        assert self._filtered(
+            "Found GPU0 Orin which is of cuda capability 8.7.\n"
+            "Minimum and Maximum cuda capability supported by this version "
+            "of PyTorch is (9.0) (12.0)"
+        )
+
+    def test_same_warning_about_another_gpu_is_not_silenced(self) -> None:
+        # Same message, same prefix, different capability: a card that really
+        # is unsupported must still warn, so the pattern pins 8.7 rather than
+        # matching any "Found GPU ... compute capability" line.
+        assert not self._filtered(
+            "Found GPU0 NVIDIA GeForce GTX 750 Ti which is of compute "
+            "capability (CC) 5.0.\nThe following list shows the CCs this "
+            "version of PyTorch was built for"
+        )
+
     def test_other_warnings_still_surface(self) -> None:
         # A genuinely unsupported GPU, and unrelated warnings, must not be
         # swallowed by a filter aimed at one cosmetic message.

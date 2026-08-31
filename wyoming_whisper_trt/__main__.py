@@ -414,12 +414,15 @@ def _silence_unsupported_arch_warning() -> None:
     natively on sm_87. The warning is a list lookup, not a measurement, and it
     reads as a fatal misconfiguration to anyone reading container logs.
 
-    Deliberately narrow: it matches only this message, so a genuinely
-    unsupported GPU still warns. Must run before anything touches CUDA.
+    Deliberately narrow: the pattern pins capability 8.7, so the same warning
+    about a genuinely unsupported GPU (a CC 5.0 card, say) still reaches the
+    log. Both phrasings are matched because torch reworded the message; the
+    filter is anchored at the start, which is where "Found GPU" sits. Must run
+    before anything touches CUDA.
     """
     warnings.filterwarnings(
         "ignore",
-        message=r".*Found GPU.*compute capability.*",
+        message=r"Found GPU.*(?:compute capability \(CC\)|cuda capability) 8\.7",
         category=UserWarning,
     )
 
