@@ -96,7 +96,12 @@ RUN set -eu; \
         echo "The runtime python minor version must match the NGC builder's." >&2; \
         exit 1; \
     fi; \
-    "$py" -c 'import torch, wyoming_whisper_trt'
+    # Beyond "does it import": pip can resolve a CPU-only torch, and tensorrt
+    # can install as a wheel whose libraries never load. Either produces an
+    # image that starts, listens, accepts audio and quietly transcribes on the
+    # CPU. Assert both here, at build time, instead of discovering it as a
+    # mysteriously slow container.
+    "$py" -c 'import tensorrt, torch, wyoming_whisper_trt; assert torch.version.cuda, "torch has no CUDA build: " + torch.__version__; print("verified: torch", torch.__version__, "cuda", torch.version.cuda, "tensorrt", tensorrt.__version__)'
 
 WORKDIR /
 COPY ./run.sh ./

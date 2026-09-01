@@ -123,7 +123,12 @@ jobs:
           context: .
           file: ./Dockerfile.igpu
           tags: ${{ steps.prepare-igpu-tags.outputs.igpu_tags }}
-          labels: ${{ steps.meta.outputs.labels }}-igpu
+          # The same labels as the dGPU image, deliberately. This was
+          # '${{ steps.meta.outputs.labels }}-igpu', but that output is a
+          # newline-separated list of key=value pairs, so the suffix landed on
+          # the value of whichever label came last rather than marking the
+          # image. The '-igpu' tag is what distinguishes these builds.
+          labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/arm64
           # zstd layers; see the note on the dGPU step above.
           outputs: type=image,push=true,compression=zstd,compression-level=3,force-compression=true

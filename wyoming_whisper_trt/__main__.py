@@ -20,6 +20,8 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+import tensorrt
+import torch
 from whisper.model import disable_sdpa
 from wyoming.info import AsrModel, AsrProgram, Attribution, Info
 from wyoming.server import AsyncServer
@@ -28,7 +30,9 @@ from whisper_trt import (
     WhisperTRT,
     WhisperTRTBuilder,
     auto_workspace_mb,
+    get_device_arch_tag,
     get_model_filename,
+    get_trt_version_tag,
     int8_available,
     load_trt_model,
 )
@@ -223,6 +227,44 @@ async def run_server(
         # Use the stop method to handle event handler shutdown and server closure
         await server.stop()
         logger.info("Server and event handlers stopped gracefully.")
+
+
+def _log_runtime_configuration(model_name: str, language: str) -> None:
+    """Emit one line naming what actually got loaded.
+
+    Every field here is something the process can end up running with *other*
+    than what was asked for, and each has a silent-degradation path: an engine
+    restored from a checkpoint built under different settings, a decoder that
+    fell back, a language tag that does not match an English-only model. Where
+    a config value and the loaded reality can diverge, this reports the loaded
+    reality.
+
+    Deliberately one greppable line at INFO, rather than the DEBUG lines that
+    carry the same facts, because CI asserts on it: a smoke test that only
+    proves the process listens on a port cannot tell a working TensorRT engine
+    from a degraded one, and nothing can be asserted that is not printed.
+    """
+    try:
+        device_name = (
+            torch.cuda.get_device_name() if torch.cuda.is_available() else "cpu"
+        )
+    except (RuntimeError, AssertionError):  # pragma: no cover - driver dependent
+        device_name = "unknown"
+
+    logger.info(
+        "whisper-trt runtime: model=%s compute_type=%s decoder=%s language=%s "
+        "device='%s' arch=%s tensorrt=%s (tag %s) torch=%s cuda=%s",
+        model_name,
+        WhisperTRTBuilder.get_compute_type(),
+        WhisperTRTBuilder.decoder_mode,
+        language,
+        device_name,
+        get_device_arch_tag(),
+        tensorrt.__version__,
+        get_trt_version_tag(),
+        torch.__version__,
+        torch.version.cuda,
+    )
 
 
 def _apply_compute_type(compute_type: str) -> None:
@@ -500,6 +542,7 @@ async def main() -> None:
             language=args.language,
         )
         logger.info("Whisper TRT model '%s' loaded successfully.", model_name)
+        _log_runtime_configuration(model_name, args.language)
     except (KeyError, RuntimeError, OSError, ValueError) as err:
         logger.error("Failed to load Whisper TRT model '%s': %s", model_name, err)
         sys.exit(1)

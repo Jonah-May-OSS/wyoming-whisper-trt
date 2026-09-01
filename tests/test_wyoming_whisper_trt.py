@@ -10,6 +10,7 @@ compute type.
 
 import asyncio
 import io
+import os
 import re
 import socket
 import sys
@@ -33,7 +34,10 @@ _CUDA_AVAILABLE = torch.cuda.is_available()
 
 _DIR = Path(__file__).parent
 _PROGRAM_DIR = _DIR.parent
-_LOCAL_DIR = _PROGRAM_DIR / "local"
+# The engine cache these tests build into. Overridable because a cold build is
+# minutes (longer for int8, which calibrates), and CI runners keep a persistent
+# cache mount: pointing this there pays the build once instead of every run.
+_LOCAL_DIR = Path(os.environ.get("WHISPER_TRT_TEST_DATA_DIR") or _PROGRAM_DIR / "local")
 _SAMPLES_PER_CHUNK = 1024
 # Generous: covers a cold TensorRT engine build before the port opens.
 _STARTUP_TIMEOUT = 600
