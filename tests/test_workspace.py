@@ -234,3 +234,52 @@ class TestUnsupportedArchWarningFilter:
             "compatible with the current PyTorch installation."
         )
         assert not self._filtered("some unrelated deprecation")
+
+
+class TestBudgetIsStableEnoughToCacheOn:
+    """The budget lands in the engine cache filename, so it must not drift.
+
+    ``get_model_filename`` keys the checkpoint on the workspace. An unrounded
+    budget tracks free VRAM continuously -- 3800 MiB free gave ws876, 3500 gave
+    ws726 -- so two runs of the same build on one machine disagreed about the
+    filename, the cache missed, and the run was pushed into the rebuild it was
+    short of memory for. The cache stopped working exactly when it mattered.
+    """
+
+    @pytest.mark.parametrize(
+        "free_mb", [2500, 2800, 3000, 3333, 3500, 3800, 4000, 4096, 5000, 7777]
+    )
+    def test_the_budget_is_always_a_whole_number_of_buckets(self, free_mb: int) -> None:
+        with _free_vram(free_mb):
+            assert auto_workspace_mb("base") % _MIN_WORKSPACE_MB == 0
+
+    @pytest.mark.parametrize(
+        ("low_mb", "high_mb"),
+        [
+            # Each pair straddles a few hundred MiB of drift -- another process
+            # taking memory, or a previous engine still resident -- without
+            # crossing a bucket. Unrounded, every one of these changed the name.
+            (3400, 3500),
+            (3600, 3700),
+            (3800, 3900),
+            (4200, 4800),
+        ],
+    )
+    def test_nearby_vram_gives_the_same_budget(self, low_mb: int, high_mb: int) -> None:
+        with _free_vram(low_mb):
+            low = auto_workspace_mb("base")
+        with _free_vram(high_mb):
+            high = auto_workspace_mb("base")
+        assert low == high
+
+    @pytest.mark.parametrize("free_mb", [3333, 3800, 5555])
+    def test_rounding_goes_down_never_up(self, free_mb: int) -> None:
+        """Rounding up would hand back more than the VRAM clamp allows."""
+        unrounded = int(_VRAM_FRACTION * (free_mb - _BUILD_MEMORY_RESERVE_MB))
+        with _free_vram(free_mb):
+            assert auto_workspace_mb("base") <= max(unrounded, _MIN_WORKSPACE_MB)
+
+    def test_the_floor_still_wins_when_there_is_nothing_spare(self) -> None:
+        """Rounding must not push a tight budget below the floor, or to zero."""
+        with _free_vram(_BUILD_MEMORY_RESERVE_MB):
+            assert auto_workspace_mb("base") == _MIN_WORKSPACE_MB
