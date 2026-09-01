@@ -43,9 +43,9 @@ jobs:
       # wyoming_whisper_trt/VERSION is read at import time and shipped in the
       # package, and main carries a placeholder rather than a number anyone has
       # to remember to bump -- so the release branch is where the real version
-      # gets written. It has to be committed, not just written: the tag is cut
-      # from this branch and the container workflow builds from that tag, which
-      # is how 1.2.0, 1.2.1 and 1.2.2 all shipped calling themselves 1.1.0.
+      # gets written. It has to be committed, not just written: the container
+      # workflow builds from the published tag, which is how 1.2.0, 1.2.1 and
+      # 1.2.2 all shipped calling themselves 1.1.0.
       #
       # Pushed with GITHUB_TOKEN on purpose. The same push made with
       # PERSONAL_GITHUB_TOKEN would match this workflow's own release/* push
@@ -53,15 +53,50 @@ jobs:
       # GITHUB_TOKEN do not trigger workflows.
       - name: Write the release version into the package
         run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           if [ "$(cat wyoming_whisper_trt/VERSION)" = "$VERSION" ]; then
             echo "VERSION already reads $VERSION; nothing to commit."
             exit 0
           fi
           printf '%s\n' "$VERSION" > wyoming_whisper_trt/VERSION
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit wyoming_whisper_trt/VERSION -m "chore(release): set the package version to $VERSION"
           git push origin "HEAD:${GITHUB_REF#refs/heads/}"
+
+      # GitReleaseManager derives the tag from the milestone name, but it does
+      # not tag this branch -- on the first 1.3.0 attempt it tagged the default
+      # branch instead, so the tag named the commit from *before* the step
+      # above and carried the 0.0.0.dev0 placeholder into the image. Creating
+      # the tag here settles which commit it names; the create step below finds
+      # it already present and hangs the release off it rather than cutting its
+      # own.
+      - name: Tag the release at the version commit
+        run: |
+          existing=$(git ls-remote --tags origin "refs/tags/$VERSION" | cut -f1)
+          if [ -n "$existing" ]; then
+            if [ "$existing" = "$(git rev-parse HEAD)" ]; then
+              echo "Tag $VERSION already names this commit."
+              exit 0
+            fi
+            echo "::error::Tag $VERSION already exists and names $existing, not $(git rev-parse HEAD). Delete the tag and the release before re-running."
+            exit 1
+          fi
+          git tag -a "$VERSION" -m "Release $VERSION"
+          git push origin "refs/tags/$VERSION"
+
+      # Assert the artifact rather than trusting the steps that produced it.
+      # Everything downstream -- the zip, the release, the container image --
+      # is built from this tag, so if it does not carry the right version the
+      # release is wrong and should fail here rather than ship.
+      - name: Verify the tag carries the release version
+        run: |
+          git fetch --quiet --force origin "refs/tags/$VERSION:refs/tags/$VERSION"
+          tagged=$(git show "$VERSION:wyoming_whisper_trt/VERSION")
+          if [ "$tagged" != "$VERSION" ]; then
+            echo "::error::Tag $VERSION carries version '$tagged'"
+            exit 1
+          fi
+          echo "Tag $VERSION carries version $tagged."
 
       - name: Zip Release
         run: zip -x '*.git*' -r release.zip .
