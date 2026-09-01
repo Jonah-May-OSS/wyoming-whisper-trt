@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
-"""Lint the package and tests with ruff, black, isort, and mypy in the venv."""
+"""Lint and type-check the repository with ruff and ty, in the venv.
+
+Deliberately the same two tools, over the same paths, as the Ruff and ty
+workflows run in CI. This script used to run black, isort and mypy alongside
+them, which meant it disagreed with CI about formatting and about types -- and
+because no workflow invoked it, nobody found out: it had been failing (34 mypy
+errors, two files black wanted to reformat) for as long as anyone can tell.
+"""
 
 import subprocess
 
-from _common import MODULE_DIR, TESTS_DIR, venv_python
+from _common import PROGRAM_DIR, venv_python
 
-_LINT_DIRS = [MODULE_DIR, TESTS_DIR]
 python = venv_python()
 
-# Run ruff for fast linting and formatting checks
-subprocess.check_call([python, "-m", "ruff", "check", *_LINT_DIRS])
-subprocess.check_call([python, "-m", "ruff", "format", "--check", *_LINT_DIRS])
-
-# Run traditional linters for additional checks
-subprocess.check_call([python, "-m", "black", *_LINT_DIRS, "--check"])
-subprocess.check_call([python, "-m", "isort", *_LINT_DIRS, "--check"])
-subprocess.check_call([python, "-m", "mypy", *_LINT_DIRS])
+subprocess.check_call([python, "-m", "ruff", "check", "."], cwd=PROGRAM_DIR)
+subprocess.check_call([python, "-m", "ruff", "format", "--check", "."], cwd=PROGRAM_DIR)
+subprocess.check_call([python, "-m", "ty", "check"], cwd=PROGRAM_DIR)

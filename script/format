@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Auto-format the package and tests with ruff, black, and isort in the venv."""
+"""Auto-format the repository with ruff, in the venv.
+
+ruff format is the formatter and ruff's "I" rules are the import sorter, so the
+black and isort passes this used to run afterwards were a second formatter and
+a second import sorter competing for the same files -- whichever ran last won,
+and CI's ruff-format step then disagreed with whatever came out.
+"""
 
 import subprocess
 
-from _common import MODULE_DIR, TESTS_DIR, venv_python
+from _common import PROGRAM_DIR, venv_python
 
-_FORMAT_DIRS = [MODULE_DIR, TESTS_DIR]
 python = venv_python()
 
-# Run ruff for fast auto-fixes and formatting
-subprocess.check_call([python, "-m", "ruff", "check", "--fix", *_FORMAT_DIRS])
-subprocess.check_call([python, "-m", "ruff", "format", *_FORMAT_DIRS])
-
-# Run traditional formatters
-subprocess.check_call([python, "-m", "black", *_FORMAT_DIRS])
-subprocess.check_call([python, "-m", "isort", *_FORMAT_DIRS])
+subprocess.check_call([python, "-m", "ruff", "check", "--fix", "."], cwd=PROGRAM_DIR)
+subprocess.check_call([python, "-m", "ruff", "format", "."], cwd=PROGRAM_DIR)

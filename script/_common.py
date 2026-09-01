@@ -8,8 +8,6 @@ from pathlib import Path
 
 PROGRAM_DIR = Path(__file__).resolve().parent.parent
 VENV_DIR = PROGRAM_DIR / ".venv"
-MODULE_DIR = PROGRAM_DIR / "wyoming_whisper_trt"
-TESTS_DIR = PROGRAM_DIR / "tests"
 
 
 def venv_python() -> str:

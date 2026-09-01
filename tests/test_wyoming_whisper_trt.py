@@ -159,7 +159,7 @@ def test_rms_of_full_scale_square_wave_is_one() -> None:
 
 def test_is_no_speech_gate() -> None:
     """The no-speech gate fires only above threshold and stays off when disabled."""
-    tensorrt = pytest.importorskip("tensorrt")  # noqa: F841  # model.py needs TRT
+    pytest.importorskip("tensorrt")  # model.py needs TRT to import
     from whisper_trt.model import WhisperTRT
 
     class _Tok:
@@ -169,10 +169,12 @@ def test_is_no_speech_gate() -> None:
     high = torch.tensor([[[0.0, 0.0, 10.0, 0.0]]])  # softmax ~0.9995 on no_speech
     low = torch.tensor([[[10.0, 0.0, 0.0, 0.0]]])  # near-zero on no_speech
 
+    # _is_no_speech is a staticmethod that reads only ``tokenizer.no_speech``,
+    # and via getattr at that, so a stub stands in for the real Tokenizer.
     gate = WhisperTRT._is_no_speech
-    assert gate(None, _Tok(), high, 0.6) is True
-    assert gate(None, _Tok(), low, 0.6) is False
-    assert gate(None, _Tok(), high, None) is False  # disabled
+    assert gate(_Tok(), high, 0.6) is True
+    assert gate(_Tok(), low, 0.6) is False
+    assert gate(_Tok(), high, None) is False  # disabled
 
 
 @pytest.mark.asyncio

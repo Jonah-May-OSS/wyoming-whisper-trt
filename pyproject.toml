@@ -102,41 +102,17 @@ indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
 
-[tool.black]
-line-length = 88
-target-version = ['py312']
-include = '\.pyi?$'
-extend-exclude = '''
-/(
-  # directories
-  \.eggs
-  | \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | build
-  | dist
-  | torch2trt
-)/
-'''
+[tool.ty.src]
+# Matches the include pyright used, so this is a like-for-like swap. Tests
+# are checked by neither; widening the scope is its own change.
+include = ["wyoming_whisper_trt", "whisper_trt"]
+exclude = ["torch2trt", "**/__pycache__"]
 
-[tool.isort]
-profile = "black"
-line_length = 88
-multi_line_output = 3
-include_trailing_comma = true
-force_grid_wrap = 0
-use_parentheses = true
-indent = 4
-
-[tool.mypy]
-python_version = "3.12"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = false
-exclude = [
-    "torch2trt",
-    "build",
-    "dist",
-]
+[tool.ty.environment]
+# Matches the version CI installs and runs the suite on. Note this is ahead of
+# both requires-python (>=3.12) and the runtime image, which is pinned to
+# python3.12 by its Ubuntu 24.04 base -- so 3.13+ stdlib and syntax pass
+# analysis here that the shipped container could not run. Deliberate: the
+# fix for that is to move the image, not to check against a version nothing
+# develops on.
+python-version = "3.14"
