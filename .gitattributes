@@ -1,0 +1,20 @@
+# Normalize line endings in the repository to LF.
+#
+# Without this, a checkout on Windows with core.autocrlf=true rewrites these
+# files with CRLF. That is harmless for the .py sources, but fatal for anything
+# executed as a script inside the Linux container: `docker build` copies the
+# working tree in, and script/setup then dies with
+#     /usr/bin/env: 'python3\r': No such file or directory
+# because the CR is parsed as part of the shebang's interpreter name.
+* text=auto eol=lf
+
+# Executables and shell scripts must be LF regardless of platform.
+script/* text eol=lf
+*.sh text eol=lf
+run.sh text eol=lf
+
+# Binary assets must never be line-ending converted.
+*.wav binary
+*.png binary
+*.jpg binary
+*.pdf binary
