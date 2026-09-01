@@ -28,16 +28,14 @@ jobs:
   # runner, against the pinned requirements. Fails the PR before the expensive
   # self-hosted job is ever queued.
   #
-  # Both Python versions are deliberate: 3.12 is what the runtime image ships
-  # (the Dockerfile's ubuntu:24.04 stage), 3.14 is what the self-hosted job
-  # installs. Testing only one of them leaves the other shipping untested.
+  # 3.14, matching the self-hosted job and [tool.ty.environment], so the two
+  # jobs cannot disagree about what they are testing. Note this is ahead of the
+  # runtime image, which its Ubuntu 24.04 base pins to python3.12: nothing in
+  # CI exercises the interpreter the container actually runs. Closing that
+  # means moving the image, not adding a second leg here.
   unit_tests:
-    name: "Unit tests (Python ${{ matrix.python-version }})"
+    name: "Unit tests"
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ['3.12', '3.14']
     steps:
       - name: Checkout Code
         uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
@@ -64,15 +62,15 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@28f2168f4d98ee0445e3c6321f6e6616c83dd5ec
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: '3.14'
 
       - name: Cache pip downloads
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cache/pip
-          key: pip-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('requirements.txt', 'requirements_dev.txt') }}
+          key: pip-${{ runner.os }}-3.14-${{ hashFiles('requirements.txt', 'requirements_dev.txt') }}
           restore-keys: |
-            pip-${{ runner.os }}-${{ matrix.python-version }}-
+            pip-${{ runner.os }}-3.14-
 
       # The same script the Dockerfile runs, so an install that breaks in the
       # image breaks here first. It needs no CUDA toolkit: torch2trt's nvcc
