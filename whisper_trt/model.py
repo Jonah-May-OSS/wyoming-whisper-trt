@@ -24,7 +24,6 @@
 # This module orchestrates the encoder plus the three decoder engines, their
 # builders, and the loader; the decode modules themselves live in _decoder.py.
 # It runs a little over the default line cap as a cohesive unit.
-# pylint: disable=too-many-lines
 
 import ctypes
 import ctypes.util
@@ -44,6 +43,7 @@ import numpy as np
 import tensorrt
 import torch
 import whisper.audio
+import whisper.tokenizer
 from torch import nn
 from whisper import load_model
 from whisper.model import LayerNorm, ModelDimensions, Tensor, disable_sdpa
@@ -1389,7 +1389,7 @@ class WhisperTRTBuilder:
                 language=None,
                 task="transcribe",
             )
-        return cast(Tokenizer, cls._tokenizer)
+        return cls._tokenizer
 
     @classmethod
     def _load_audio_encoder(

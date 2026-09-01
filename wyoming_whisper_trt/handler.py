@@ -123,7 +123,6 @@ class WhisperTrtEventHandler(AsyncEventHandler):
 
     # Holds per-connection state (buffers, language, per-connection prompt);
     # 8 attributes is intentional for a stateful protocol handler.
-    # pylint: disable=too-many-instance-attributes
 
     def __init__(
         self,

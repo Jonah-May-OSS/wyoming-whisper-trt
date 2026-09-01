@@ -1,4 +1,4 @@
-name: Pylint
+name: ty
 permissions:
   contents: read
 
@@ -9,7 +9,7 @@ on:
     branches: [ main ]
 
 jobs:
-  pylint:
+  ty:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -24,8 +24,9 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt -r requirements_dev.txt
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r requirements.txt -r requirements_dev.txt
 
-      - name: Run pylint
-        run: pylint wyoming_whisper_trt/ whisper_trt/
+      - name: Run ty
+        run: .venv/bin/ty check

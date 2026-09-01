@@ -130,6 +130,13 @@ force_grid_wrap = 0
 use_parentheses = true
 indent = 4
 
+[tool.ty.src]
+include = ["wyoming_whisper_trt", "whisper_trt"]
+exclude = ["torch2trt", "**/__pycache__"]
+
+[tool.ty.environment]
+python-version = "3.14"
+
 [tool.mypy]
 python_version = "3.12"
 warn_return_any = true
