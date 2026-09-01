@@ -1,12 +1,13 @@
 ---
 name: Release
 
-# Every write this workflow performs -- creating, publishing and closing the
-# release -- goes through PERSONAL_GITHUB_TOKEN. The default GITHUB_TOKEN is
-# only used implicitly, by actions/checkout, to clone. Without this block it
-# was issued with the repository's default (write) scopes for no reason.
+# Creating, publishing and closing the release goes through
+# PERSONAL_GITHUB_TOKEN. GITHUB_TOKEN is used by actions/checkout to clone and
+# by the version step below to push one commit back to the release branch, so
+# it needs contents: write and nothing else. Without this block it was issued
+# with the repository's default scopes for no reason.
 permissions:
-  contents: read
+  contents: write
 
 on:
   push:
@@ -27,7 +28,40 @@ jobs:
       - name: Extract version from branch name
         run: |
           VERSION=${GITHUB_REF#refs/heads/release/}
+          # This value becomes a git tag, a GitHub milestone lookup and the
+          # version setuptools parses out of the VERSION file, so a branch
+          # named release/whatever must fail here rather than three steps
+          # later. Kept in sync with tests/test_version.py, which checks the
+          # pattern against the versions actually released so far.
+          VERSION_PATTERN='^[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?$'
+          if ! printf '%s' "$VERSION" | grep -Eq "$VERSION_PATTERN"; then
+            echo "::error::Branch release/$VERSION does not name a release version"
+            exit 1
+          fi
           echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      # wyoming_whisper_trt/VERSION is read at import time and shipped in the
+      # package, and main carries a placeholder rather than a number anyone has
+      # to remember to bump -- so the release branch is where the real version
+      # gets written. It has to be committed, not just written: the tag is cut
+      # from this branch and the container workflow builds from that tag, which
+      # is how 1.2.0, 1.2.1 and 1.2.2 all shipped calling themselves 1.1.0.
+      #
+      # Pushed with GITHUB_TOKEN on purpose. The same push made with
+      # PERSONAL_GITHUB_TOKEN would match this workflow's own release/* push
+      # trigger and start a second run of it; pushes authenticated with
+      # GITHUB_TOKEN do not trigger workflows.
+      - name: Write the release version into the package
+        run: |
+          if [ "$(cat wyoming_whisper_trt/VERSION)" = "$VERSION" ]; then
+            echo "VERSION already reads $VERSION; nothing to commit."
+            exit 0
+          fi
+          printf '%s\n' "$VERSION" > wyoming_whisper_trt/VERSION
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit wyoming_whisper_trt/VERSION -m "chore(release): set the package version to $VERSION"
+          git push origin "HEAD:${GITHUB_REF#refs/heads/}"
 
       - name: Zip Release
         run: zip -x '*.git*' -r release.zip .
