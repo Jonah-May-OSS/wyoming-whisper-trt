@@ -1,4 +1,4 @@
-# WhisperTRT
+# Wyoming Whisper TRT
 
 Runs [OpenAI Whisper](https://github.com/openai/whisper) on [NVIDIA TensorRT](https://developer.nvidia.com/tensorrt)
 and serves it over the [Wyoming protocol](https://www.home-assistant.io/integrations/wyoming/)
