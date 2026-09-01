@@ -109,4 +109,10 @@ include = ["wyoming_whisper_trt", "whisper_trt"]
 exclude = ["torch2trt", "**/__pycache__"]
 
 [tool.ty.environment]
+# Matches the version CI installs and runs the suite on. Note this is ahead of
+# both requires-python (>=3.12) and the runtime image, which is pinned to
+# python3.12 by its Ubuntu 24.04 base -- so 3.13+ stdlib and syntax pass
+# analysis here that the shipped container could not run. Deliberate: the
+# fix for that is to move the image, not to check against a version nothing
+# develops on.
 python-version = "3.14"

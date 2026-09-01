@@ -37,6 +37,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@28f2168f4d98ee0445e3c6321f6e6616c83dd5ec
         with:
+          # Matches [tool.ty.environment] and the test workflow.
           python-version: '3.14'
 
       - name: Cache pip downloads
