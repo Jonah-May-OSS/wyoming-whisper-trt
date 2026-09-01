@@ -10,10 +10,6 @@ services:
       DATA_DIR:   "${DATA_DIR:-/data}"
       COMPUTE_TYPE: "${COMPUTE_TYPE:-float16}"
       DECODER_MODE: "${DECODER_MODE:-kv}"
-      DEVICE:     "${DEVICE:-cuda}"
-      BEAM_SIZE:  "${BEAM_SIZE:-5}"
-      STREAMING:  "${STREAMING:-false}"
-      DEBUG:      "${DEBUG:-false}"
       NVIDIA_VISIBLE_DEVICES:     all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       # Required on Jetson. run.sh keys its first-run setup off this: without it
