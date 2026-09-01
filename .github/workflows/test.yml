@@ -1,21 +1,94 @@
 name: Test Whisper TRT ASR Server
 permissions:
   contents: read
-  pull-requests: write
 
 on:
   pull_request:
     branches: [ main ]
+    # Deliberately short. 'tests/**' used to be ignored, which meant a PR that
+    # only touched tests ran no tests at all; '.github/**' was ignored, which
+    # meant a change to this file could not be validated by this file.
     paths-ignore:
-      - '.github/**'
       - '.vscode/**'
       - 'examples/**'
-      - 'tests/**'
       - '**/*.md'
       - 'renovate.json'
+  push:
+    branches: [ main ]
+
+# Superseded runs are cancelled so the single self-hosted GPU runner is not
+# working through a queue of commits nobody is waiting on. Scoped per PR, so
+# concurrent PRs still queue rather than cancel each other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  # Add a dependency job that waits for required checks
+  # The fast gate: the whole suite minus the GPU-marked tests, on a hosted
+  # runner, against the pinned requirements. Fails the PR before the expensive
+  # self-hosted job is ever queued.
+  #
+  # Both Python versions are deliberate: 3.12 is what the runtime image ships
+  # (the Dockerfile's ubuntu:24.04 stage), 3.14 is what the self-hosted job
+  # installs. Testing only one of them leaves the other shipping untested.
+  unit_tests:
+    name: "Unit tests (Python ${{ matrix.python-version }})"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.14']
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
+        with:
+          # tests/test_quant.py imports torch2trt's precision module straight
+          # from the checkout when it is not installed, so the submodule has to
+          # be present even though nothing is built here.
+          submodules: recursive
+
+      # The pinned requirements pull CUDA-enabled torch plus the NVIDIA CUDA,
+      # cuDNN and TensorRT wheels: roughly 8 GB installed, against a hosted
+      # runner that starts with about half that free. Removing toolchains this
+      # job will never use buys back ~25 GB. Done inline rather than through a
+      # third-party action so no new code is trusted with the runner.
+      - name: Free disk space
+        shell: bash
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+                      /usr/local/share/powershell /usr/share/swift || true
+          df -h /
+
+      - name: Setup Python
+        uses: actions/setup-python@28f2168f4d98ee0445e3c6321f6e6616c83dd5ec
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('requirements.txt', 'requirements_dev.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-${{ matrix.python-version }}-
+
+      # The same script the Dockerfile runs, so an install that breaks in the
+      # image breaks here first. It needs no CUDA toolkit: torch2trt's nvcc
+      # extension is opt-in behind --plugins, which script/setup does not pass.
+      - name: Setup Virtual Environment
+        shell: bash
+        run: |
+          chmod +x script/setup
+          ./script/setup --dev
+
+      # No GPU here, so the CUDA-marked tests skip. -ra prints the skip reasons,
+      # which is how a test that silently stopped running gets noticed.
+      - name: Run tests
+        shell: bash
+        run: .venv/bin/python -m pytest tests -v -ra
+
   wait_for_checks:
     name: "Wait for required checks"
     runs-on: ubuntu-latest
@@ -33,7 +106,14 @@ jobs:
   test_linux:
     name: "Build and Test on Linux (self-hosted runner)"
     runs-on: self-hosted
-    needs: wait_for_checks
+    needs: [unit_tests, wait_for_checks]
+    # Never run a fork's code on the self-hosted runner. pip executes arbitrary
+    # build code during install, so a fork PR that repoints requirements.txt at
+    # a hostile sdist is code execution on the runner; the read-only token a
+    # fork PR gets does not help with that.
+    if: >-
+      github.event_name == 'push' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     steps:
       # 1. Checkout the repository code
       - name: Checkout Code
@@ -45,104 +125,89 @@ jobs:
       # image (local/gpu-runner), so no in-job apt/pip installs are needed.
 
       # Setup Python. RUNNER_TOOL_CACHE points at the persistent NFS cache on
-      # the runner, so 3.13 is downloaded once and restored instantly after.
+      # the runner, so 3.14 is downloaded once and restored instantly after.
       - name: Setup Python
         uses: actions/setup-python@28f2168f4d98ee0445e3c6321f6e6616c83dd5ec
         with:
-          python-version: '3.14'  # Use a stable version
+          python-version: '3.14'
 
-      # CUDA toolkit IS required here: torch2trt/setup.py builds a CUDAExtension
-      # ('plugins') via nvcc, which needs CUDA_HOME. (glados can drop it because
-      # it uses the torch-tensorrt wheel; whisper compiles torch2trt.) The GPU
-      # driver comes from the runner's nvidia runtime; the installer is cached
-      # in GitHub cache + the persistent runner tool cache. CUDA_HOME is set
-      # explicitly so torch's cpp_extension finds it.
-      - name: Install CUDA Toolkit
-        uses: Jimver/cuda-toolkit@3d45d157f327c09c04b50ee6ccdea2d9d017ec76
-        with:
-          # GitHub Actions cache is scoped per-branch, so on a self-hosted runner
-          # it misses on nearly every PR and re-downloads the ~4GB installer over
-          # the network. Disable it and rely only on the local tool cache, which
-          # lives on the runner's persistent NFS RUNNER_TOOL_CACHE and always hits
-          # after the first install.
-          use-github-cache: false
-          use-local-cache: true
-
-      # 6. Create and activate virtual environment (torch2trt compiles here)
+      # 2. Create the virtual environment.
+      #
+      # No CUDA toolkit step: torch2trt's only nvcc-built extension ('plugins')
+      # is opt-in behind --plugins, which script/setup does not pass, so the
+      # install is pure Python. This job used to download a ~4 GB CUDA installer
+      # for a compile that no longer happens. The GPU driver comes from the
+      # runner's nvidia runtime, and torch and tensorrt ship their own CUDA
+      # libraries as wheels.
       - name: Setup Virtual Environment
         shell: bash
-        env:
-          # Jimver exports CUDA_PATH; torch2trt's CUDAExtension needs CUDA_HOME.
-          CUDA_HOME: ${{ env.CUDA_PATH }}
         run: |
           chmod +x script/setup
-          ./script/setup
+          ./script/setup --dev
 
-      # 7. Start server and test listening
-      - name: Start server and test listening
+      # 3. Resolve the persistent engine/model cache used by the steps below.
+      #
+      # The runner pool has mixed GPUs (e.g. sm_89 RTX 4070 Ti and sm_86 RTX
+      # 3050) and TRT engine plans are architecture specific. The engine
+      # checkpoint filename carries the compute capability of the device torch
+      # selects, so runners of different archs can share these dirs without one
+      # deserializing the other's plan (TRT "incompatible device" error 6).
+      - name: Resolve cache directories
         shell: bash
         run: |
-          # Activate the virtual environment
+          if [ -n "${RUNNER_CACHE:-}" ]; then
+            echo "DATA_DIR=$RUNNER_CACHE/whisper/data" >> "$GITHUB_ENV"
+            echo "DOWNLOAD_DIR=$RUNNER_CACHE/whisper/download" >> "$GITHUB_ENV"
+          else
+            echo "DATA_DIR=$PWD/data" >> "$GITHUB_ENV"
+            echo "DOWNLOAD_DIR=$PWD/download" >> "$GITHUB_ENV"
+          fi
+
+      # 4. The acceptance test. tests/test_wyoming_whisper_trt.py starts the
+      # real server over TCP and asserts the exact transcript of a known WAV,
+      # across float16/int8 and both decoder modes. It is skipped everywhere
+      # without a GPU, which is to say it had never run anywhere. This is the
+      # step that proves transcription works, as opposed to proving a port
+      # opened.
+      - name: Run tests (including GPU-only)
+        shell: bash
+        env:
+          # Build engines into the persistent cache; a cold int8 build is
+          # minutes, and the repo checkout is discarded after every run.
+          WHISPER_TRT_TEST_DATA_DIR: ${{ env.DATA_DIR }}
+        run: |
+          mkdir -p "$WHISPER_TRT_TEST_DATA_DIR"
+          .venv/bin/python -m pytest tests -v -ra
+
+      # 5. Start the server exactly as the container does, and assert what it
+      # actually loaded.
+      - name: Start server and assert acceleration
+        shell: bash
+        run: |
+          set -uo pipefail
           source .venv/bin/activate
 
-          # Define server URI for testing
-          TEST_URI="tcp://127.0.0.1:8080"
-
-          # Data and model download dirs. Point them at the persistent runner
-          # cache when available so the expensive TRT engine build + model
-          # download are reused across runs; fall back to local dirs on runners
-          # without the cache mount.
-          #
-          # The runner pool has mixed GPUs (e.g. sm_89 RTX 4070 Ti and sm_86 RTX
-          # 3050) and TRT engine plans are architecture specific. The engine
-          # checkpoint lands in --download-dir, and its filename now carries the
-          # compute capability of the device torch selects, so runners of
-          # different archs can share these dirs without one deserializing the
-          # other's plan (TRT "incompatible device" error 6).
-          if [ -n "$RUNNER_CACHE" ]; then
-            DATA_DIR="$RUNNER_CACHE/whisper/data"
-            DOWNLOAD_DIR="$RUNNER_CACHE/whisper/download"
-          else
-            DATA_DIR="./data"
-            DOWNLOAD_DIR="./download"
-          fi
+          mkdir -p "$DATA_DIR" "$DOWNLOAD_DIR"
           echo "Using DATA_DIR=$DATA_DIR DOWNLOAD_DIR=$DOWNLOAD_DIR"
 
-          # Create necessary directories
-          mkdir -p $DATA_DIR
-          mkdir -p $DOWNLOAD_DIR
-
-          # Start the server in the background, redirecting output to server.log
-          # CI smoke test only needs to prove the server loads a model, builds
-          # its TRT engine, and listens. Use base.en (English-only, ~74M): far
-          # less VRAM/RAM and a much faster engine build than medium (~769M),
-          # which was OOMing against the runner memory limit. --language en
-          # matches the English-only model (auto detection doesn't apply).
+          # base.en (English-only, ~74M): far less VRAM and a much faster engine
+          # build than medium (~769M), which was OOMing against the runner
+          # memory limit. --language en matches the English-only model.
           nohup python -m wyoming_whisper_trt.__main__ \
             --model base.en \
-            --uri $TEST_URI \
-            --data-dir $DATA_DIR \
-            --download-dir $DOWNLOAD_DIR \
+            --uri tcp://127.0.0.1:8080 \
+            --data-dir "$DATA_DIR" \
+            --download-dir "$DOWNLOAD_DIR" \
             --compute-type float16 \
             --language en \
             > server.log 2>&1 &
-        
-          # Capture the server's Process ID (PID)
           SERVER_PID=$!
           echo "Started Whisper TRT server with PID $SERVER_PID"
 
-          # Function to check if the server is listening on port 8080
-          function is_server_listening() {
-            nc -z localhost 8080
-          }
-
-          # Initialize timeout parameters
-          TIMEOUT=600      # Maximum time to wait for the server to start (in seconds)
-          INTERVAL=10      # Interval between each check (in seconds)
+          TIMEOUT=600
+          INTERVAL=10
           ELAPSED=0
-
-          # Loop to check if the server is listening
-          while ! is_server_listening; do
+          while ! nc -z localhost 8080; do
             # Fail fast if the server process died (e.g. a native segfault)
             # instead of waiting out the full timeout.
             if ! kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -153,29 +218,77 @@ jobs:
               cat server.log || true
               exit 1
             fi
-            if [ $ELAPSED -ge $TIMEOUT ]; then
+            if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
               echo "Server failed to start within $TIMEOUT seconds."
               kill "$SERVER_PID" 2>/dev/null || true
+              cat server.log || true
               exit 1
             fi
             echo "Waiting for server to start... ($ELAPSED/$TIMEOUT seconds elapsed)"
-            sleep $INTERVAL
+            sleep "$INTERVAL"
             ELAPSED=$((ELAPSED + INTERVAL))
           done
+          echo "Server is listening on port 8080."
 
-          echo "Server is successfully listening on port 8080."
+          kill "$SERVER_PID" 2>/dev/null || true
+          wait "$SERVER_PID" 2>/dev/null || true
 
-          # Terminate the server gracefully
-          kill $SERVER_PID
-          wait $SERVER_PID 2>/dev/null || true
+          # Listening proves the process started, not that it started the way it
+          # was asked to. The server logs one line naming what it actually
+          # loaded; each assertion below covers a setting that can diverge from
+          # the flags above without the process ever failing.
+          echo "----- runtime configuration -----"
+          if ! grep -F "whisper-trt runtime:" server.log; then
+            echo "::error::Server never logged its runtime configuration."
+            cat server.log
+            exit 1
+          fi
 
-          # Exit the step with success
-          exit 0
+          FAILED=0
+          assert_log() {
+            if grep -Eq "$1" server.log; then
+              echo "ok: $2"
+            else
+              echo "::error::$2"
+              FAILED=1
+            fi
+          }
 
-      # 8. Upload server logs (always upload logs regardless of success or failure)
+          # What was asked for on the command line.
+          assert_log 'whisper-trt runtime:.*[[:space:]]model=base\.en[[:space:]]' \
+            'model is base.en'
+          assert_log 'whisper-trt runtime:.*[[:space:]]compute_type=float16[[:space:]]' \
+            'compute type is float16, not a silently downgraded engine'
+          assert_log 'whisper-trt runtime:.*[[:space:]]language=en[[:space:]]' \
+            'language is en'
+
+          # That the acceleration is real. arch=smunknown and device='cpu' are
+          # what this line reports when torch found no CUDA device, which is the
+          # shape a silent fallback to CPU would take.
+          assert_log 'whisper-trt runtime:.*[[:space:]]arch=sm[0-9]+[[:space:]]' \
+            'a CUDA device was selected (arch is not smunknown)'
+          assert_log "whisper-trt runtime:.*device='[^']*[Nn][Vv][Ii][Dd][Ii][Aa][^']*'" \
+            'torch reports an NVIDIA device'
+          assert_log 'whisper-trt runtime:.*[[:space:]]tensorrt=[0-9]+\.' \
+            'TensorRT is loaded and reports a version'
+          assert_log 'whisper-trt runtime:.*[[:space:]]cuda=[0-9]+\.' \
+            'torch was built against CUDA'
+
+          if grep -q "Traceback (most recent call last)" server.log; then
+            echo "::error::Server logged a traceback during startup."
+            FAILED=1
+          fi
+
+          if [ "$FAILED" -ne 0 ]; then
+            echo "----- server.log -----"
+            cat server.log
+            exit 1
+          fi
+
+      # 6. Upload server logs (always, regardless of outcome)
       - name: Upload server logs
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: server-logs
           path: server.log
-        if: always()  # This ensures the step runs even if previous steps fail
+        if: always()
