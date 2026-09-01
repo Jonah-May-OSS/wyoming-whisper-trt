@@ -1008,6 +1008,16 @@ def auto_workspace_mb(model_name: str) -> int:
         return target
     spare_mb = free_bytes / (1 << 20) - _BUILD_MEMORY_RESERVE_MB
     cap_mb = int(_WORKSPACE_VRAM_FRACTION * spare_mb)
+    # Round the cap down to a whole number of _MIN_WORKSPACE_MB before it can
+    # reach the caller, because this value ends up in the engine cache
+    # filename (get_model_filename keys on it). Unrounded it tracks free VRAM
+    # continuously -- 3800 MiB free gives ws876, 3500 gives ws726 -- so two
+    # runs of the same build on the same machine disagree about the filename,
+    # the cache misses, and the run is forced into exactly the rebuild that
+    # needs the memory it is short of. Rounding down never asks for more than
+    # the clamp allows, and it takes a swing of a whole bucket to change the
+    # name.
+    cap_mb -= cap_mb % _MIN_WORKSPACE_MB
     return max(_MIN_WORKSPACE_MB, min(target, cap_mb))
 
 
