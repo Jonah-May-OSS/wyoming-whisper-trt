@@ -1,5 +1,13 @@
 ---
 name: Release
+
+# Every write this workflow performs -- creating, publishing and closing the
+# release -- goes through PERSONAL_GITHUB_TOKEN. The default GITHUB_TOKEN is
+# only used implicitly, by actions/checkout, to clone. Without this block it
+# was issued with the repository's default (write) scopes for no reason.
+permissions:
+  contents: read
+
 on:
   push:
     branches:
