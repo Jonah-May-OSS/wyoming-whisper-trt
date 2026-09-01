@@ -103,9 +103,10 @@ skip-magic-trailing-comma = false
 line-ending = "auto"
 
 [tool.ty.src]
-# Matches the include pyright used, so this is a like-for-like swap. Tests
-# are checked by neither; widening the scope is its own change.
-include = ["wyoming_whisper_trt", "whisper_trt"]
+# Wider than the include pyright used, which was the two packages: tests had
+# never been type checked by anything. Adding them reported seven findings,
+# none of them noise.
+include = ["wyoming_whisper_trt", "whisper_trt", "tests"]
 exclude = ["torch2trt", "**/__pycache__"]
 
 [tool.ty.environment]

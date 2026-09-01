@@ -37,7 +37,7 @@ import wave
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 import numpy as np
 import tensorrt
@@ -123,6 +123,20 @@ def _new_shared_device_memory() -> Any:
     # resolved by getattr is untyped, and calling it directly is what pylint
     # flags as not-callable.
     return _instantiate_type(pool_cls)
+
+
+class SupportsNoSpeech(Protocol):
+    """What ``WhisperTRT._is_no_speech`` actually needs of a tokenizer.
+
+    The real caller passes a whisper ``Tokenizer``, but the method reads one
+    attribute and reads it through ``getattr`` with a default, precisely so a
+    tokenizer without the token still works. Annotating the parameter as
+    ``Tokenizer`` claimed more than the body requires, and left test doubles --
+    which are the whole reason the lookup is defensive -- looking like errors.
+    """
+
+    @property
+    def no_speech(self) -> int: ...
 
 
 class IncompatibleEngineError(RuntimeError):
@@ -823,7 +837,7 @@ class WhisperTRT(nn.Module):
 
     @staticmethod
     def _is_no_speech(
-        tokenizer: Tokenizer,
+        tokenizer: SupportsNoSpeech,
         first_logits: Tensor,
         threshold: float | None,
     ) -> bool:

@@ -96,17 +96,23 @@ class _FakeEngine:
 
     ``routes`` names which context-creation spellings this TensorRT provides:
     "config" (11.x and 10.x), "strategy" (10.x), "legacy" (pre-10, removed in
-    11.0), or none at all.
+    11.0), or none at all. ``refuse_context`` is the other failure TensorRT can
+    hand back: a route that exists and returns nothing.
     """
 
     def __init__(
-        self, nbytes: int, routes: tuple[str, ...] = ("config",), v2: bool = False
+        self,
+        nbytes: int,
+        routes: tuple[str, ...] = ("config",),
+        v2: bool = False,
+        refuse_context: bool = False,
     ) -> None:
         self.device_memory_size_v2 = nbytes
         self.device_memory_size = nbytes
         self.context = _FakeContext(v2=v2)
         self.route_used: str | None = None
         self._routes = routes
+        self._refuse_context = refuse_context
         self.runtime_config: _FakeRuntimeConfig | None = None
         if "config" in routes:
             self.create_runtime_config = self._create_runtime_config
@@ -123,6 +129,8 @@ class _FakeEngine:
 
     def create_execution_context(self, arg: Any = None) -> _FakeContext | None:
         """Accept whichever argument shape this fake claims to support."""
+        if self._refuse_context:
+            return None
         if isinstance(arg, _FakeRuntimeConfig):
             self.route_used = "config"
             return self.context
@@ -177,8 +185,10 @@ class TestRoutes:
         assert pool.nbytes == 0
 
     def test_a_refused_context_degrades(self, pool: Any) -> None:
-        engine = _FakeEngine(1 << 20)
-        engine.create_execution_context = lambda arg=None: None
+        # A route that exists but hands back nothing. Modelled on the fake
+        # rather than by replacing the method on the instance, so what is being
+        # simulated is stated once, where the other TensorRT shapes are.
+        engine = _FakeEngine(1 << 20, refuse_context=True)
         assert pool.add(engine) is None
         assert pool.nbytes == 0
 
