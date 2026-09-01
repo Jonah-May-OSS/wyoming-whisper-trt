@@ -39,6 +39,8 @@ _PROGRAM_DIR = _DIR.parent
 # cache mount: pointing this there pays the build once instead of every run.
 _LOCAL_DIR = Path(os.environ.get("WHISPER_TRT_TEST_DATA_DIR") or _PROGRAM_DIR / "local")
 _SAMPLES_PER_CHUNK = 1024
+# See the note where this is passed to the server.
+_TEST_WORKSPACE_MB = 512
 # Generous: covers a cold TensorRT engine build before the port opens.
 _STARTUP_TIMEOUT = 600
 _TRANSCRIBE_TIMEOUT = 120
@@ -206,6 +208,19 @@ async def test_wyoming_whisper_trt(compute_type: str, decoder_mode: str) -> None
         decoder_mode,
         "--language",
         "en",
+        # Pinned rather than auto-sized, for two reasons.
+        #
+        # auto_workspace_mb derives the budget from free VRAM *at that moment*,
+        # and get_model_filename keys the engine cache on the budget. So when
+        # VRAM is tight the chosen budget differs, the cached engine no longer
+        # matches by name, and the run is forced into exactly the rebuild that
+        # needs the memory it has not got. Pinning it makes the cache hit.
+        #
+        # And these tests prove transcription is correct, not that tactic
+        # search had a generous budget; 512 MiB builds the same engine with
+        # less search, and leaves that much more room for the build itself.
+        "--max-workspace-mb",
+        str(_TEST_WORKSPACE_MB),
         stdin=DEVNULL,
         stdout=PIPE,
         stderr=PIPE,

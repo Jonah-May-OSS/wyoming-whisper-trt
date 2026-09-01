@@ -175,7 +175,14 @@ jobs:
           WHISPER_TRT_TEST_DATA_DIR: ${{ env.DATA_DIR }}
         run: |
           mkdir -p "$WHISPER_TRT_TEST_DATA_DIR"
-          .venv/bin/python -m pytest tests -v -ra
+          # Two invocations, not one. The end-to-end suite spawns servers that
+          # build TensorRT engines, and anything an earlier test left resident
+          # in this process is memory those builds cannot have -- test_quant
+          # constructs TRT builders, each of which holds a CUDA context for the
+          # rest of the session. Running it in its own process makes the
+          # engine builds see a GPU with only their own allocations on it.
+          .venv/bin/python -m pytest tests -v -ra --ignore=tests/test_wyoming_whisper_trt.py
+          .venv/bin/python -m pytest tests/test_wyoming_whisper_trt.py -v -ra
 
       # 5. Start the server exactly as the container does, and assert what it
       # actually loaded.
