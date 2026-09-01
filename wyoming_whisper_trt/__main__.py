@@ -343,6 +343,20 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--no-cuda-graphs",
+        dest="cuda_graphs",
+        action="store_false",
+        help=(
+            "Disable CUDA-graph replay of the per-token decoder step (on by "
+            "default with --decoder-mode kv). The decode loop is host-launch-"
+            "bound, so replaying a captured graph roughly halves per-step time "
+            "and tightens the p99 tail; disabling it restores the dynamic step "
+            "engine. Note this selects a different step engine, so toggling it "
+            "builds (and caches) a separate checkpoint. No effect with "
+            "--decoder-mode simple, whose engine changes shape every token."
+        ),
+    )
+    parser.add_argument(
         "--max-workspace-mb",
         type=int,
         default=None,
@@ -489,7 +503,13 @@ async def main() -> None:
     # Select the decoder implementation (must precede get_model_filename, which
     # keys the cache on the decoder mode).
     WhisperTRTBuilder.decoder_mode = args.decoder_mode
-    logger.debug("Decoder mode set to '%s'.", args.decoder_mode)
+    WhisperTRTBuilder.cuda_graphs = args.cuda_graphs
+    logger.debug(
+        "Decoder mode set to '%s' (cuda_graphs=%s -> engines '%s').",
+        args.decoder_mode,
+        args.cuda_graphs,
+        WhisperTRTBuilder.effective_decoder_mode(),
+    )
 
     # Resolve the build-time workspace budget. When unset, pick one from the
     # model size and free VRAM (more generous for large models); an explicit
