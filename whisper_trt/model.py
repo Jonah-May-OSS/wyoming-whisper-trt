@@ -649,7 +649,7 @@ class WhisperTRT(nn.Module):
 
             if request.stream:
                 interim = request.out_tokens[:, request.prompt_len : request.cur_len]
-                chunks.append(self._decode_tokens(interim))
+                chunks.append(self._decode_tokens(tokenizer, interim))
 
             if last_token_id == tokenizer.eot or request.cur_len >= request.max_len:
                 break
@@ -666,7 +666,7 @@ class WhisperTRT(nn.Module):
             end_index = request.cur_len - 1
 
         final_text = self._decode_tokens(
-            request.out_tokens[:, request.prompt_len : end_index]
+            tokenizer, request.out_tokens[:, request.prompt_len : end_index]
         )
         return final_text, chunks, time.perf_counter() - decode_start
 
@@ -705,7 +705,7 @@ class WhisperTRT(nn.Module):
 
             if request.stream:
                 interim = request.out_tokens[:, request.prompt_len : request.cur_len]
-                chunks.append(self._decode_tokens(interim))
+                chunks.append(self._decode_tokens(tokenizer, interim))
 
             if last_token_id == tokenizer.eot:
                 break
@@ -715,7 +715,7 @@ class WhisperTRT(nn.Module):
             end_index = request.cur_len - 1
 
         final_text = self._decode_tokens(
-            request.out_tokens[:, request.prompt_len : end_index]
+            tokenizer, request.out_tokens[:, request.prompt_len : end_index]
         )
         return final_text, chunks, time.perf_counter() - decode_start
 
@@ -749,7 +749,7 @@ class WhisperTRT(nn.Module):
 
             if request.stream:
                 interim = request.out_tokens[:, request.prompt_len : request.cur_len]
-                chunks.append(self._decode_tokens(interim))
+                chunks.append(self._decode_tokens(tokenizer, interim))
 
             if last_token_id == tokenizer.eot or request.cur_len >= request.max_len:
                 break
@@ -765,7 +765,7 @@ class WhisperTRT(nn.Module):
             end_index = request.cur_len - 1
 
         final_text = self._decode_tokens(
-            request.out_tokens[:, request.prompt_len : end_index]
+            tokenizer, request.out_tokens[:, request.prompt_len : end_index]
         )
         return final_text, chunks, time.perf_counter() - decode_start
 
@@ -928,16 +928,28 @@ class WhisperTRT(nn.Module):
         probs = torch.softmax(first_logits[0, -1, :].float(), dim=-1)
         return float(probs[no_speech_id].item()) >= threshold
 
-    def _decode_tokens(self, tokens: torch.Tensor) -> str:
-        """Decode token tensor to clean text without internal control markers."""
-        tokenizer = self._get_tokenizer()
-        text = tokenizer.decode(list(tokens.flatten().cpu().numpy()))
-        return (
-            text.replace("<|transcribe|>", "")
-            .replace("<|notimestamps|>", "")
-            .replace("<|endoftext|>", "")
-            .strip()
-        )
+    @staticmethod
+    def _decode_tokens(tokenizer: Tokenizer, tokens: torch.Tensor) -> str:
+        """Decode generated tokens to text, dropping Whisper's markers.
+
+        Filtered by id rather than by spelling. whisper's ``Tokenizer.decode``
+        keeps every id where ``t < self.timestamp_begin`` and drops the rest,
+        and ``timestamp_begin`` sits *above* every special marker -- so the only
+        thing it removes is timestamps, and ``<|startoftranscript|>``, the
+        language tag, the task tag and ``<|nospeech|>`` all survive it and land
+        in the transcript as literal text. Replacing three spellings, as this
+        did, leaves the other hundred-odd: every language tag, and the sot
+        marker itself. `medium` returned
+
+            <|startoftranscript|><|en|> Turn on the living room lamp.
+
+        ``eot`` is the lowest special id in both the multilingual and the
+        English-only vocabulary, so everything below it is transcript and
+        everything at or above it is a marker. Taking the tokenizer as an
+        argument rather than re-fetching it: every caller already has one.
+        """
+        ids = tokens.flatten().tolist()
+        return tokenizer.decode([t for t in ids if t < tokenizer.eot]).strip()
 
 
 # Whisper variants whose encoder/decoder are large enough that the default
