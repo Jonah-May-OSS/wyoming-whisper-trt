@@ -1,6 +1,7 @@
 """Tests for wyoming-faster-whisper"""
 
 import asyncio
+import importlib.util
 import re
 import sys
 import wave
@@ -23,11 +24,22 @@ _INFO_TIMEOUT = 15
 
 _TRANSCRIBE_TIMEOUT = 60
 
+# wyoming_faster_whisper is a comparison baseline, not a dependency of this
+# package -- it is in neither requirements.txt nor requirements_dev.txt. Without
+# this check the subprocess below dies on "No module named
+# wyoming_faster_whisper", async_read_event returns None, and the test fails on
+# a bare `assert event is not None` that says nothing about the actual cause.
+_HAS_FASTER_WHISPER = importlib.util.find_spec("wyoming_faster_whisper") is not None
+
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(
     sys.platform == "win32",
     reason="wyoming_faster_whisper stdio transport is unreliable on Windows",
+)
+@pytest.mark.skipif(
+    not _HAS_FASTER_WHISPER,
+    reason="wyoming_faster_whisper is not installed",
 )
 async def test_faster_whisper() -> None:
     """Transcribe a known WAV through wyoming_faster_whisper over stdio."""
@@ -56,7 +68,9 @@ async def test_faster_whisper() -> None:
         event = await asyncio.wait_for(
             async_read_event(proc.stdout), timeout=_INFO_TIMEOUT
         )
-        assert event is not None
+        assert event is not None, (
+            "server closed stdout before sending Info; it most likely failed to start"
+        )
 
         if not Info.is_type(event.type):
             continue

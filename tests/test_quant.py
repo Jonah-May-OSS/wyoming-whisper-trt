@@ -3,8 +3,13 @@
 TensorRT 11 only honours INT8 that is already in the graph, so what matters is
 that the rewritten graph carries Q/DQ pairs, keeps FP32 I/O, and is *valid* —
 type inference included, since a graph whose QuantizeLinear scale no longer
-matches its input type passes a shallow check and then fails to parse. All of
-that is checkable on CPU: no GPU, no TensorRT, no engine build.
+matches its input type passes a shallow check and then fails to parse. Nothing
+here builds an engine.
+
+The INT8 cases still need an NVIDIA driver, though not a device to run on:
+ModelOpt's quantize() scans the graph for custom layers, and that scan
+constructs a TensorRT builder, which initialises CUDA. They skip on a machine
+without one rather than failing.
 
 These exercise the same ModelOpt entry points torch2trt calls during conversion
 (``torch2trt/precision.py``), because that is where the encoder's precision is
@@ -73,6 +78,7 @@ def _t2t_core() -> ModuleType:
 pytestmark = pytest.mark.skipif(
     not int8_available(), reason="nvidia-modelopt is not installed"
 )
+
 
 _N_MELS = 8
 _N_STATE = 16
@@ -146,7 +152,26 @@ def _quantize(src: str, dst: str, fp16: bool) -> onnx.ModelProto:
     # data reader recovers the iteration count.
     assert arrays["x"].shape[0] // 1 == len(calibration)
     assert arrays["positional_embedding"].shape[0] // _N_FRAMES == len(calibration)
-    precision.quantize_onnx_int8(src, dst, arrays, fp16=fp16)
+    try:
+        precision.quantize_onnx_int8(src, dst, arrays, fp16=fp16)
+    except TypeError as err:
+        # ModelOpt's quantize() calls load_onnx_model(), which scans the graph
+        # for custom layers, and that scan constructs a trt.Builder -- which
+        # initialises CUDA. With no NVIDIA driver pybind11 cannot construct it
+        # and raises this. The rewrite itself is CPU work; it is only reachable
+        # through a call that is not, so the environment is what is missing,
+        # not the behaviour under test.
+        #
+        # Detected from the failure rather than probed up front: probing means
+        # naming trt.Builder here, and duplicating a precondition is how it
+        # drifts from the call it is meant to describe. Anything else re-raises,
+        # so a reworded message fails loudly instead of silently skipping.
+        if "factory function returned nullptr" not in str(err):
+            raise
+        pytest.skip(
+            "TensorRT cannot create a builder here, so ModelOpt's INT8 path "
+            "cannot run: no usable NVIDIA driver"
+        )
     return onnx.load(dst)
 
 
