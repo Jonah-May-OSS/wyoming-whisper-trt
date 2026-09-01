@@ -1248,9 +1248,27 @@ class WhisperTRTBuilder:
                 input_names=["x", "positional_embedding"],
                 output_names=["output"],
                 max_workspace_size=cls._effective_workspace(),
-                # Everything the Q/DQ pairs don't cover (attention matmuls,
-                # layer norms, softmax) is cast to FP16 in the same quantizer
-                # pass, so an int8 encoder is INT8-where-quantized, FP16 else.
+                # Keep the residual adds and layer norms out of INT8. They
+                # carry the accumulated activations, whose outliers set an
+                # enormous per-tensor range -- the worst scale measured was
+                # 4.35, i.e. a span of ~553 squeezed into 256 levels -- and
+                # quantizing them is what destroys the encoder. Measured on
+                # base, encoder features against the FP16 engine:
+                #
+                #   quantize everything        cosine 0.61  -> "" / "music"
+                #   without Add + LayerNorm    cosine 0.98  -> correct text
+                #
+                # They cost nearly nothing to leave in FP16 (elementwise, not
+                # the compute), so the MatMuls carrying the INT8 win stay
+                # quantized. Conv adds ~0.001 and is left in.
+                #
+                # ModelOpt already keeps the attention BMMs out on its own
+                # (only weight-bearing MatMuls get Q/DQ), so they need no entry
+                # here -- and excluding them explicitly changes nothing.
+                int8_op_block_list=("Add", "LayerNormalization"),
+                # Everything left unquantized is cast to FP16 in the same
+                # quantizer pass, so an int8 encoder is INT8-where-quantized,
+                # FP16 elsewhere.
                 fp16_mode=cls.fp16_mode or int8_mode,
                 log_level=_trt_log_level(cls.verbose),
             )
