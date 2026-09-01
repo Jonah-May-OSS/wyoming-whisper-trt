@@ -42,9 +42,8 @@ python script/setup --dev
 
 This will install both production and development dependencies, including:
 - pytest and pytest-asyncio for testing
-- ruff for fast linting and formatting
-- black and isort for code formatting
-- mypy for type checking
+- ruff for linting and formatting
+- ty for type checking
 
 ## Code Quality Tools
 
@@ -52,7 +51,7 @@ This project uses modern Python development tools to maintain code quality:
 
 ### Ruff - Fast Linting and Formatting
 
-[Ruff](https://github.com/astral-sh/ruff) is a fast, Rust-based linter and formatter that replaces multiple tools (flake8, isort, pylint, and more).
+[Ruff](https://github.com/astral-sh/ruff) is a fast, Rust-based linter and formatter. It is the only formatter and import sorter this project uses, replacing black, isort, flake8 and pylint.
 
 **Run linting checks:**
 ```bash
@@ -60,11 +59,12 @@ python script/lint
 ```
 
 This runs:
-- `ruff check` - Fast linting (checks for errors, style issues, etc.)
+- `ruff check` - Linting (errors, style issues, import order)
 - `ruff format --check` - Verify code formatting
-- `black --check` - Traditional formatting check
-- `isort --check` - Import sorting check
-- `mypy` - Type checking
+- `ty check` - Type checking
+
+These are the same tools, over the same paths, that the Ruff and ty workflows
+run in CI, so a green `script/lint` means a green CI.
 
 **Auto-fix issues:**
 ```bash
@@ -72,10 +72,8 @@ python script/format
 ```
 
 This runs:
-- `ruff check --fix` - Auto-fix linting issues
+- `ruff check --fix` - Auto-fix linting issues (including import order)
 - `ruff format` - Format code
-- `black` - Additional formatting
-- `isort` - Sort imports
 
 ### Pytest - Testing Framework
 
@@ -103,11 +101,7 @@ The main configuration file for the project, containing:
 - Project metadata and dependencies
 - Pytest configuration
 - Ruff linting and formatting rules
-- Black, isort, and mypy settings
-
-### setup.cfg (Legacy)
-
-Contains legacy flake8 configuration. Most configuration has been migrated to `pyproject.toml`.
+- ty type-checking settings
 
 ## Coding Standards
 
@@ -118,7 +112,7 @@ Imports should be sorted in the following order:
 2. Third-party library imports
 3. Local application imports
 
-Ruff and isort will handle this automatically.
+Ruff handles this automatically (`script/format`).
 
 ### Type Hints
 
@@ -134,7 +128,7 @@ Ruff and isort will handle this automatically.
 
 ### Line Length
 
-- Maximum line length is 88 characters (Black/Ruff default)
+- Maximum line length is 88 characters (the Ruff default)
 - The formatter will handle this automatically
 
 ## Testing Guidelines

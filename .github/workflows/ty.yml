@@ -15,12 +15,37 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
         with:
+          # torch2trt is not installed here -- ty resolves it from the checkout,
+          # and without the submodule every import of it is an unresolved one.
           submodules: recursive
 
+      # ty needs the real dependencies to resolve against, and requirements.txt
+      # pulls CUDA-enabled torch plus the NVIDIA CUDA, cuDNN and TensorRT
+      # wheels: roughly 8 GB, against a hosted runner that starts with about
+      # half that free. Removing toolchains this job will never use buys back
+      # ~25 GB. Inline rather than via a third-party action so no new code is
+      # trusted with the runner.
+      - name: Free disk space
+        shell: bash
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+                      /usr/local/share/powershell /usr/share/swift || true
+          df -h /
+
       - name: Setup Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@28f2168f4d98ee0445e3c6321f6e6616c83dd5ec
         with:
           python-version: '3.14'
+
+      - name: Cache pip downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-3.14-${{ hashFiles('requirements.txt', 'requirements_dev.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-3.14-
 
       - name: Install dependencies
         run: |

@@ -821,8 +821,8 @@ class WhisperTRT(nn.Module):
             return list(tokenizer.all_language_codes)
         return ["en"]
 
+    @staticmethod
     def _is_no_speech(
-        self,
         tokenizer: Tokenizer,
         first_logits: Tensor,
         threshold: float | None,

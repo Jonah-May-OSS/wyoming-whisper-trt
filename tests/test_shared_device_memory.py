@@ -121,7 +121,7 @@ class _FakeEngine:
         self.route_used = "legacy"
         return self.context
 
-    def create_execution_context(self, arg: Any = None) -> _FakeContext:
+    def create_execution_context(self, arg: Any = None) -> _FakeContext | None:
         """Accept whichever argument shape this fake claims to support."""
         if isinstance(arg, _FakeRuntimeConfig):
             self.route_used = "config"

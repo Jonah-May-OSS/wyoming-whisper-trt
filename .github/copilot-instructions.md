@@ -86,14 +86,15 @@ When assigned a task:
    ```bash
    python script/format
    ```
-   - Takes 10-30 seconds. Runs black and isort formatters.
+   - Takes 10-30 seconds. Runs `ruff check --fix` and `ruff format`.
    - **Requires**: Development dependencies installed via `script/setup --dev`
 
 3. **Lint Code**:
    ```bash
    python script/lint
    ```
-   - Takes 1-3 minutes. Runs black, isort, flake8, pylint, and mypy.
+   - Takes a few seconds. Runs `ruff check`, `ruff format --check`, and
+     `ty check` -- the same tools CI runs.
    - **NEVER CANCEL**: Set timeout to 10+ minutes for large codebases.
    - **Requires**: Development dependencies installed via `script/setup --dev`
 
@@ -200,11 +201,9 @@ These commands help verify the codebase integrity before committing to long buil
 This project uses modern Python development tools to maintain consistent code quality:
 
 **Linters and Formatters:**
-- **Ruff**: Fast, Rust-based linter and formatter (primary tool)
-- **Black**: Code formatter with 88-character line length
-- **isort**: Import sorting (standard library → third-party → local)
-- **mypy**: Static type checking
-- **flake8**: Additional style checking (legacy)
+- **Ruff**: linter, formatter and import sorter, at 88 characters. The only
+  formatter this project uses; black, isort, flake8 and pylint were removed.
+- **ty**: static type checking (replaced mypy and pyright)
 
 **Type Hints:**
 - Use type hints for all function parameters and return values
@@ -231,7 +230,7 @@ from wyoming_whisper_trt import handler
 ```
 
 **Code Quality Requirements:**
-- Maximum line length: 88 characters (enforced by Black/Ruff)
+- Maximum line length: 88 characters (enforced by Ruff)
 - All code must pass `python script/lint` before committing
 - All code must be formatted with `python script/format`
 - Write tests for new features (see `tests/` directory for examples)
@@ -330,7 +329,7 @@ If you see `pip._vendor.urllib3.exceptions.ReadTimeoutError: HTTPSConnectionPool
 **Partial Build Capability**: With current access, you can install:
 - TensorRT packages (tensorrt-cu12-bindings, etc.)
 - PyTorch with CUDA support
-- Some PyPI packages (intermittently): Wyoming Protocol, development tools (black, isort, pytest)
+- Some PyPI packages (intermittently): Wyoming Protocol, development tools (ruff, ty, pytest)
 - But NOT reliably: OpenAI Whisper, complex dependency chains
 
 **Recommended Approach**: Continue using Docker builds or pre-built container images for reliable full builds. Individual package installations may work with retries.
@@ -384,8 +383,7 @@ docker compose config  # Validate Docker configuration (5-10 seconds)
 ### Important Configuration Files
 - `setup.py` - Package configuration and console script entry point
 - `requirements.txt` - Production dependencies (PyTorch, TensorRT, Wyoming)
-- `requirements_dev.txt` - Development dependencies (black, pytest, etc.)
-- `setup.cfg` - Linting configuration (flake8, isort)
+- `requirements_dev.txt` - Development dependencies (ruff, ty, pytest)
 
 ## Common Development Tasks
 
