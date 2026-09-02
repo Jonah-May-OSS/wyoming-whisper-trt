@@ -30,4 +30,4 @@ onnx-graphsurgeon==0.6.1
 # so the GPU build would be pure image bloat). Without it every torch2trt
 # conversion logs "No module named 'onnxruntime'" and silently skips folding.
 onnxruntime~=1.29.0
-torch==2.13.0
+torch==2.14.0
