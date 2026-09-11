@@ -1,9 +1,9 @@
 --extra-index-url https://pypi.nvidia.com
 wyoming==1.10.2
 openai-whisper==20250625
-tensorrt_cu13_bindings~=11.2.1.2
-tensorrt_cu13_libs~=11.2.1.2
-tensorrt~=11.2.1.2
+tensorrt_cu13_bindings~=11.3.0.99
+tensorrt_cu13_libs~=11.3.0.99
+tensorrt~=11.3.0.99
 # TensorRT 11 removed weak typing: the FP16/INT8 builder flags are gone and
 # precision has to be expressed in the ONNX graph handed to the parser. ModelOpt
 # rewrites the graph for both — AutoCast casts an FP32 graph to FP16, and the
