@@ -27,6 +27,7 @@ from .cache import get_cache_dir, set_cache_dir
 from .model import (
     LARGE_MODELS,
     MODEL_FILENAMES,
+    EngineContextError,
     IncompatibleEngineError,
     WhisperTRT,
     WhisperTRTBuilder,
@@ -40,6 +41,7 @@ from .model import (
 __all__ = [
     "LARGE_MODELS",
     "MODEL_FILENAMES",
+    "EngineContextError",
     "IncompatibleEngineError",
     "WhisperTRT",
     "WhisperTRTBuilder",
