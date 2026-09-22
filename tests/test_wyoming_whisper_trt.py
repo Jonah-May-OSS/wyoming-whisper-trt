@@ -26,7 +26,7 @@ import torch
 from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioStart, AudioStop, wav_to_chunks
 from wyoming.error import Error
-from wyoming.event import async_read_event, async_write_event
+from wyoming.event import Event, async_read_event, async_write_event
 from wyoming.info import Describe, Info
 
 from wyoming_whisper_trt.handler import (
@@ -294,26 +294,28 @@ class _ExplodingModel:
         raise AttributeError("'NoneType' object has no attribute 'set_tensor_address'")
 
 
-def _handler_with_model(model: Any) -> tuple[WhisperTrtEventHandler, list[Any]]:
-    """Build a handler around ``model``, capturing the events it writes."""
-    handler = WhisperTrtEventHandler(
-        asyncio.StreamReader(),
-        cast(Any, None),
-        HandlerContext(
-            wyoming_info=Info(),
-            model=cast(Any, model),
-            model_lock=asyncio.Lock(),
-        ),
-        HandlerSettings(),
-    )
+class _CapturingHandler(WhisperTrtEventHandler):
+    """Handler that records the events it would have sent to a client.
 
-    written: list[Any] = []
+    Overriding ``write_event`` is what lets this run without a real connection,
+    so the writer is never touched.
+    """
 
-    async def _capture(event: Any) -> None:
-        written.append(event)
+    def __init__(self, model: Any) -> None:
+        super().__init__(
+            asyncio.StreamReader(),
+            cast(Any, None),
+            HandlerContext(
+                wyoming_info=Info(),
+                model=model,
+                model_lock=asyncio.Lock(),
+            ),
+            HandlerSettings(),
+        )
+        self.written: list[Event] = []
 
-    handler.write_event = _capture  # type: ignore[method-assign]
-    return handler, written
+    async def write_event(self, event: Event) -> None:
+        self.written.append(event)
 
 
 def _record_one_second(handler: WhisperTrtEventHandler) -> None:
@@ -338,12 +340,12 @@ async def test_transcription_failure_reports_an_error_event() -> None:
     tie it back to this server, and every voice command failed with no error
     surfaced anywhere.
     """
-    handler, written = _handler_with_model(_ExplodingModel())
+    handler = _CapturingHandler(_ExplodingModel())
     _record_one_second(handler)
 
     await handler._handle_audio_stop()
 
-    errors = [e for e in written if Error.is_type(e.type)]
+    errors = [e for e in handler.written if Error.is_type(e.type)]
     assert len(errors) == 1, "expected exactly one Error event"
     error = Error.from_event(errors[0])
     assert error.code == "AttributeError"
@@ -352,6 +354,6 @@ async def test_transcription_failure_reports_an_error_event() -> None:
     # An EMPTY transcript still has to follow, so the client completes its
     # turn instead of hanging, and never speaks the error text back.
     transcripts = [
-        Transcript.from_event(e) for e in written if Transcript.is_type(e.type)
+        Transcript.from_event(e) for e in handler.written if Transcript.is_type(e.type)
     ]
     assert [t.text for t in transcripts] == [""]
