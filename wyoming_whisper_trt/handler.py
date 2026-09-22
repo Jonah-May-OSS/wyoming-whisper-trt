@@ -257,7 +257,15 @@ class WhisperTrtEventHandler(AsyncEventHandler):
                 )
             final_text = result.get("text", "").strip()
             logger.debug("➡️ Emitting final Transcript: %r", final_text)
-        except (RuntimeError, OSError, ValueError) as err:
+        except Exception as err:
+            # Deliberately broad: anything the model raises has to come back as
+            # an Error event. A narrow tuple here used to let AttributeError
+            # escape -- the shape a half-initialised TRT module fails with,
+            # e.g. "'NoneType' object has no attribute 'set_tensor_address'"
+            # when TensorRT could not allocate an execution context. Escaping
+            # killed the Wyoming event-handler task outright, so Home Assistant
+            # saw the connection drop rather than a failed transcription, with
+            # nothing in its log tying that back to this server.
             logger.error("Transcription failed: %s", err, exc_info=True)
             # Signal failure via an Error event and emit an EMPTY transcript,
             # rather than sending the error text as recognized speech (Home

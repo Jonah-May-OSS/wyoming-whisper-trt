@@ -18,17 +18,25 @@ import wave
 from asyncio.subprocess import DEVNULL, PIPE, Process
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pytest
 import torch
 from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioStart, AudioStop, wav_to_chunks
+from wyoming.error import Error
 from wyoming.event import async_read_event, async_write_event
 from wyoming.info import Describe, Info
 
-from wyoming_whisper_trt.handler import TARGET_RATE, _rms, wav_bytes_to_np_array
+from wyoming_whisper_trt.handler import (
+    TARGET_RATE,
+    HandlerContext,
+    HandlerSettings,
+    WhisperTrtEventHandler,
+    _rms,
+    wav_bytes_to_np_array,
+)
 
 _CUDA_AVAILABLE = torch.cuda.is_available()
 
@@ -272,3 +280,78 @@ async def test_wyoming_whisper_trt(compute_type: str, decoder_mode: str) -> None
         assert _INT8_WARNING_FRAGMENT in stderr_buf.decode(errors="replace"), (
             "Expected the int8 accuracy warning in server logs"
         )
+
+
+class _ExplodingModel:
+    """A model in the state a GPU-OOM start-up leaves behind.
+
+    ``TRTModule.context`` is ``None``, so the first tensor binding raises
+    ``AttributeError`` from inside torch2trt rather than anything in the
+    ``RuntimeError`` family the handler used to catch.
+    """
+
+    def transcribe(self, *args: Any, **kwargs: Any) -> dict[str, str]:
+        raise AttributeError("'NoneType' object has no attribute 'set_tensor_address'")
+
+
+def _handler_with_model(model: Any) -> tuple[WhisperTrtEventHandler, list[Any]]:
+    """Build a handler around ``model``, capturing the events it writes."""
+    handler = WhisperTrtEventHandler(
+        asyncio.StreamReader(),
+        cast(Any, None),
+        HandlerContext(
+            wyoming_info=Info(),
+            model=cast(Any, model),
+            model_lock=asyncio.Lock(),
+        ),
+        HandlerSettings(),
+    )
+
+    written: list[Any] = []
+
+    async def _capture(event: Any) -> None:
+        written.append(event)
+
+    handler.write_event = _capture  # type: ignore[method-assign]
+    return handler, written
+
+
+def _record_one_second(handler: WhisperTrtEventHandler) -> None:
+    """Put a second of audible 16 kHz mono speech-ish audio in the handler."""
+    handler._wav_buffer = io.BytesIO()
+    writer: wave.Wave_write = wave.open(handler._wav_buffer, "wb")
+    writer.setframerate(TARGET_RATE)
+    writer.setsampwidth(2)
+    writer.setnchannels(1)
+    tone = (np.sin(np.linspace(0, 440.0, TARGET_RATE)) * 10000).astype("<i2")
+    writer.writeframes(tone.tobytes())
+    handler._wave_writer = writer
+
+
+async def test_transcription_failure_reports_an_error_event() -> None:
+    """A model fault must come back as an Error, not kill the connection.
+
+    Regression guard for a five-day silent outage: the handler caught only
+    ``(RuntimeError, OSError, ValueError)``, so the ``AttributeError`` raised by
+    a TRT module with no execution context escaped and tore down the Wyoming
+    event-handler task. Home Assistant saw the connection drop with nothing to
+    tie it back to this server, and every voice command failed with no error
+    surfaced anywhere.
+    """
+    handler, written = _handler_with_model(_ExplodingModel())
+    _record_one_second(handler)
+
+    await handler._handle_audio_stop()
+
+    errors = [e for e in written if Error.is_type(e.type)]
+    assert len(errors) == 1, "expected exactly one Error event"
+    error = Error.from_event(errors[0])
+    assert error.code == "AttributeError"
+    assert "set_tensor_address" in (error.text or "")
+
+    # An EMPTY transcript still has to follow, so the client completes its
+    # turn instead of hanging, and never speaks the error text back.
+    transcripts = [
+        Transcript.from_event(e) for e in written if Transcript.is_type(e.type)
+    ]
+    assert [t.text for t in transcripts] == [""]

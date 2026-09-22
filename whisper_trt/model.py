@@ -150,6 +150,22 @@ class IncompatibleEngineError(RuntimeError):
     """
 
 
+class EngineContextError(RuntimeError):
+    """Raised when an engine deserializes but yields no execution context.
+
+    Deliberately *not* an :class:`IncompatibleEngineError`: the plan on disk is
+    fine, so the rebuild-and-retry path in :func:`load_trt_model` must not fire.
+    Rebuilding needs strictly more VRAM than loading does, so treating this as a
+    bad cache would delete a working multi-GB checkpoint and then fail again,
+    slower.
+
+    The cause is almost always that the GPU is out of memory: an execution
+    context owns the engine's activation buffer, which is allocated at context
+    creation rather than at load, so it is the first thing to fail on a card
+    that is already full.
+    """
+
+
 def get_device_arch_tag() -> str:
     """Return a cache tag for the CUDA device this process will actually use.
 
@@ -198,6 +214,16 @@ def _load_engine_module(
     ``deserialize_cuda_engine`` fails, which otherwise only surfaces later as
     an opaque ``AttributeError`` on ``NoneType``. Convert it here into an
     actionable error the loader can respond to by rebuilding.
+
+    ``context`` fails the same silent way and is checked here too. TensorRT's
+    Python bindings return ``None`` from ``create_execution_context()`` rather
+    than raising, and ``_load_from_state_dict`` stores that ``None`` as-is, so a
+    module whose engine deserialized perfectly can still be dead on arrival.
+    That is not hypothetical: a server started next to other GPU workloads with
+    13 MB of VRAM free, TensorRT logged ``initializeExecutionContext ...
+    OutOfMemory``, the load reported success, the process served traffic, and
+    every single transcription for the next five days died in torch2trt with
+    ``AttributeError: 'NoneType' object has no attribute 'set_tensor_address'``.
     """
     engine_state = checkpoint.pop(key)
     module = _new_trt_module(device_memory=device_memory).cuda()
@@ -209,6 +235,14 @@ def _load_engine_module(
             f"Failed to deserialize the '{what}' TensorRT engine on this device "
             f"({get_device_arch_tag()}); the cached plan is incompatible or corrupt "
             "and must be rebuilt. See the TensorRT log above for the exact cause."
+        )
+    if getattr(module, "context", None) is None:
+        raise EngineContextError(
+            f"Deserialized the '{what}' TensorRT engine but could not create an "
+            "execution context for it, which normally means the GPU is out of "
+            "memory. The plan itself is valid, so rebuilding will not help; free "
+            "VRAM on this device and start again. See the TensorRT log above for "
+            "the exact cause."
         )
     return module
 
@@ -1956,10 +1990,29 @@ def load_trt_model(
         _reclaim_memory()
         trt_model = builder.load(path)
 
+    # Transcribe one window of silence before handing the model back. This is
+    # the only check that exercises all three engines end to end -- encoder,
+    # prefill and decode step -- so it is the only thing that can prove the
+    # model actually works rather than merely having loaded.
+    #
+    # Its failure is therefore fatal, not a debug note. It used to be swallowed
+    # at debug level as "Warm-up skipped", which meant a model that could not
+    # transcribe anything still returned from load_trt_model, still logged
+    # "loaded successfully", and still reported itself healthy to Wyoming and to
+    # any orchestrator in front of it. A GPU-OOM startup hid behind that line
+    # for five days of silently failed transcriptions. Under a supervisor
+    # (systemd, Kubernetes) exiting here instead is also what makes the failure
+    # self-healing: the restart lands once the GPU has room.
+    silence = np.zeros((whisper.audio.N_SAMPLES,), dtype=np.float32)
     try:
-        silence = np.zeros((whisper.audio.N_SAMPLES,), dtype=np.float32)
         _ = trt_model.transcribe(silence, language=language, stream=False)
-    except (RuntimeError, ValueError) as err:
-        logger.debug("Warm-up skipped: %s", err)
+    except Exception as err:
+        # Deliberately broad. The point is to fail on ANY startup fault, and a
+        # half-initialised TRT module raises AttributeError/TypeError on
+        # NoneType rather than anything in the RuntimeError family.
+        raise RuntimeError(
+            f"Whisper TRT model '{name}' loaded but failed its start-up "
+            f"transcription, so it cannot serve requests: {err}"
+        ) from err
 
     return trt_model
