@@ -15,7 +15,7 @@ nvidia-modelopt~=0.47.0
 # its heavyweight [onnx] extra, which would also drag in cupy and
 # onnxruntime-gpu (hundreds of MB the image does not need).
 ml_dtypes~=0.6.0
-polygraphy~=0.53.4
+polygraphy~=0.53.6
 onnxslim~=0.1.96
 lief~=1.0.0
 # Deliberately ahead of the onnx~=1.21 that ModelOpt's [onnx] extra asks for:
