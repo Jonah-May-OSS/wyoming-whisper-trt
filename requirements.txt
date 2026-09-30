@@ -23,7 +23,7 @@ lief~=1.0.0
 # and the ONNX rewrites ModelOpt performs are covered against the installed
 # version by tests/test_quant.py. Revisit the pin if those start failing.
 onnx~=1.23.0
-onnxscript~=0.7.1
+onnxscript~=0.7.2
 onnx-graphsurgeon==0.6.1
 # Not imported by this project directly: onnx-graphsurgeon's fold_constants()
 # evaluates constant subgraphs through onnxruntime (CPUExecutionProvider only,
