@@ -62,5 +62,5 @@ python3 -m wyoming_whisper_trt \
     --compute-type "${COMPUTE_TYPE:-float16}" \
     --decoder-mode "${DECODER_MODE:-kv}" \
     --no-speech-threshold "${NO_SPEECH_THRESHOLD:-0.6}" \
-    --silence-threshold "${SILENCE_THRESHOLD:-0.0}" \
+    --silence-threshold "${SILENCE_THRESHOLD:-0.005}" \
     "$@"
