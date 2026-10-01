@@ -203,7 +203,7 @@ docker compose -f docker-compose-github-igpu.yaml up -d  # Jetson iGPU
 | `COMPUTE_TYPE` | `float16` | `float32`, `float16` or `int8`. See [Compute types](#compute-types-and-int8). |
 | `DECODER_MODE` | `kv` | `kv` or `simple`. See [Decoder modes](#decoder-modes). |
 | `NO_SPEECH_THRESHOLD` | `0.6` | See [Silence hallucination suppression](#silence-hallucination-suppression). |
-| `SILENCE_THRESHOLD` | `0.0` | As above; `0.0` disables the energy gate. |
+| `SILENCE_THRESHOLD` | `0.005` | RMS floor for skipping near-silent audio; set to `0.0` to disable. Higher values can reject quiet speech. |
 
 Those are the only variables the entrypoint reads. Every other server flag is
 set by appending arguments to the container command, which the entrypoint
@@ -352,10 +352,11 @@ Two gates suppress them:
   whose `<|nospeech|>` probability at the first decode position is at or above
   the threshold, exactly as upstream `whisper.transcribe` does. This is the
   accurate check and is on by default. Set it above `1.0` to disable.
-- **Energy gate** (`SILENCE_THRESHOLD`, default `0.0` = disabled): an optional
-  cheap hard cutoff that skips transcription when the audio's normalized
-  ([-1, 1]) RMS is below the threshold. Useful as belt-and-braces, but it can
-  clip genuinely quiet speech, so it is off unless you opt in (e.g. `0.005`).
+- **Energy gate** (`SILENCE_THRESHOLD`, default `0.005`): a cheap hard cutoff
+  that skips transcription when the audio's normalized ([-1, 1]) RMS is below
+  the threshold. This catches quiet room noise that Whisper may hallucinate
+  over. Lower it if genuinely quiet speech is being clipped; set it to `0.0`
+  to disable the gate.
 
 Both make the server emit an empty transcript, which Home Assistant handles as
 "nothing was said".

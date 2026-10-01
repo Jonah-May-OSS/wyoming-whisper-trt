@@ -392,12 +392,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--silence-threshold",
         type=float,
-        default=0.0,
+        default=0.005,
         help=(
-            "Optional hard energy gate: skip transcription for audio whose "
+            "Hard energy gate: skip transcription for audio whose "
             "normalized ([-1, 1]) RMS is below this value, emitting an empty "
-            "transcript. 0.0 (default) disables it; the no-speech gate is the "
-            "accurate check."
+            "transcript. Default: 0.005. Set to 0.0 to disable; increasing "
+            "the threshold can reject quiet speech."
         ),
     )
     parser.add_argument(

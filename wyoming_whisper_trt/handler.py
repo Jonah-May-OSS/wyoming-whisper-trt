@@ -99,14 +99,14 @@ class HandlerSettings:
         silence_rms_threshold: RMS energy threshold for the hard silence gate.
             Audio quieter than this normalized ([-1, 1]) root-mean-square value
             is short-circuited before reaching the model, emitting empty text.
-            0.0 disables this feature. Defaults to 0.0.
+            0.0 disables this feature. Defaults to 0.005.
     """
 
     initial_prompt: str | None = None
     streaming: bool = False
     default_language: str | None = None
     no_speech_threshold: float | None = 0.6
-    silence_rms_threshold: float = 0.0
+    silence_rms_threshold: float = 0.005
 
 
 @dataclass
