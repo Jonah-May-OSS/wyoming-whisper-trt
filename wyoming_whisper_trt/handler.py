@@ -233,8 +233,8 @@ class WhisperTrtEventHandler(AsyncEventHandler):
 
         # Cheap energy gate: near-silent audio only ever produces Whisper
         # hallucinations, so short-circuit it before touching the model. The
-        # no-speech gate inside transcribe() is the accurate check; this is an
-        # optional hard cutoff, disabled by default (threshold 0.0).
+        # no-speech gate inside transcribe() is still used for other audio; the
+        # RMS cutoff is enabled by default at 0.005 and can be configured.
         threshold = self._settings.silence_rms_threshold
         if threshold > 0.0 and _rms(audio_np) < threshold:
             logger.debug("Audio below silence RMS threshold; emitting empty transcript")
