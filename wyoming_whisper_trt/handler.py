@@ -45,17 +45,30 @@ def wav_bytes_to_np_array(wav_bytes: bytes) -> np.ndarray:
         rate = wf.getframerate()
         raw_data = wf.readframes(wf.getnframes())
 
-    dtype = {1: np.uint8, 2: np.int16, 4: np.int32}.get(sample_width)
-    if dtype is None:
-        raise ValueError(f"Unsupported WAV sample width: {sample_width * 8}-bit")
-
-    audio = np.frombuffer(raw_data, dtype=dtype).astype(np.float32)
-
-    # Normalize to [-1, 1]; 8-bit PCM is unsigned with a 128 offset.
-    if dtype == np.uint8:
-        audio = (audio - 128.0) / 128.0
+    if sample_width == 3:
+        # WAV stores 24-bit PCM as little-endian signed integers, which NumPy
+        # has no native dtype for. Assemble three bytes and sign-extend from
+        # bit 23 before normalizing below.
+        raw = np.frombuffer(raw_data, dtype=np.uint8).reshape(-1, 3)
+        audio = (
+            raw[:, 0].astype(np.int32)
+            | (raw[:, 1].astype(np.int32) << 8)
+            | (raw[:, 2].astype(np.int32) << 16)
+        )
+        audio = ((audio ^ 0x800000) - 0x800000).astype(np.float32)
+        audio /= float(2**23)
     else:
-        audio /= float(2 ** (8 * sample_width - 1))
+        dtype = {1: np.uint8, 2: np.int16, 4: np.int32}.get(sample_width)
+        if dtype is None:
+            raise ValueError(f"Unsupported WAV sample width: {sample_width * 8}-bit")
+
+        audio = np.frombuffer(raw_data, dtype=dtype).astype(np.float32)
+
+        # Normalize to [-1, 1]; 8-bit PCM is unsigned with a 128 offset.
+        if dtype == np.uint8:
+            audio = (audio - 128.0) / 128.0
+        else:
+            audio /= float(2 ** (8 * sample_width - 1))
 
     # Downmix to mono by averaging channels.
     if channels > 1:
