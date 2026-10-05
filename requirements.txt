@@ -16,7 +16,7 @@ nvidia-modelopt~=0.47.0
 # onnxruntime-gpu (hundreds of MB the image does not need).
 ml_dtypes~=0.6.0
 polygraphy~=0.53.6
-onnxslim~=0.1.96
+onnxslim~=0.1.97
 lief~=1.0.0
 # Deliberately ahead of the onnx~=1.21 that ModelOpt's [onnx] extra asks for:
 # that extra is not installed (see above), nothing else here constrains onnx,
